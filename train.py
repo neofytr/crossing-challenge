@@ -14,9 +14,14 @@ from trajectory_model import CrossingModel
 BCE_FLOOR = 0.2488
 ADE_FLOOR = 49.80
 DEVICE = "cuda"
-EPOCHS = 100
-PATIENCE = 20
+EPOCHS = 150
+PATIENCE = 30
 BATCH_SIZE = 256
+WARMUP_EPOCHS = 5
+BASE_LR = 8e-4
+MIN_LR = 1e-5
+
+MODEL_CFG = {"input_dim": 8, "hidden_dim": 128, "num_layers": 2, "dropout": 0.2}
 
 
 def compute_loss(pred_traj, true_traj, pred_intent, true_intent, frame_wh):
@@ -50,19 +55,19 @@ def evaluate(model, dev_dl):
 
     for seq, tgt_traj, tgt_intent, frame_wh, cur_center, cur_size in dev_dl:
         seq = seq.to(DEVICE)
-        frame_wh = frame_wh.to(DEVICE)
         cur_center = cur_center.to(DEVICE)
 
         pred_traj, pred_intent = model(seq)
 
-        scale = frame_wh.unsqueeze(1)
-        pred_center_px = cur_center.cpu().unsqueeze(1) + pred_traj.cpu() * frame_wh.cpu().unsqueeze(1)
-        true_center_px = cur_center.cpu().unsqueeze(1) + tgt_traj * frame_wh.cpu().unsqueeze(1)
+        fwh_cpu = frame_wh
+        cc_cpu = cur_center.cpu()
+        pred_center_px = cc_cpu.unsqueeze(1) + pred_traj.cpu() * fwh_cpu.unsqueeze(1)
+        true_center_px = cc_cpu.unsqueeze(1) + tgt_traj * fwh_cpu.unsqueeze(1)
 
-        all_pred_cx.append(pred_center_px[:, :, 0].cpu())
-        all_pred_cy.append(pred_center_px[:, :, 1].cpu())
-        all_true_cx.append(true_center_px[:, :, 0].cpu())
-        all_true_cy.append(true_center_px[:, :, 1].cpu())
+        all_pred_cx.append(pred_center_px[:, :, 0])
+        all_pred_cy.append(pred_center_px[:, :, 1])
+        all_true_cx.append(true_center_px[:, :, 0])
+        all_true_cy.append(true_center_px[:, :, 1])
         all_pred_intent.append(pred_intent.cpu())
         all_true_intent.append(tgt_intent.squeeze(-1))
 
@@ -87,19 +92,26 @@ def evaluate(model, dev_dl):
     return composite, mean_ade, per_h_ade, bce
 
 
+def get_lr(epoch):
+    if epoch <= WARMUP_EPOCHS:
+        return MIN_LR + (BASE_LR - MIN_LR) * epoch / WARMUP_EPOCHS
+    remaining = EPOCHS - WARMUP_EPOCHS
+    t = epoch - WARMUP_EPOCHS
+    return MIN_LR + 0.5 * (BASE_LR - MIN_LR) * (1 + np.cos(np.pi * t / remaining))
+
+
 def main():
     print("Building dataloaders...")
     train_dl, dev_dl = build_dataloaders(BATCH_SIZE)
     print(f"Train batches: {len(train_dl)}, Dev batches: {len(dev_dl)}")
 
-    model = CrossingModel().to(DEVICE)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
+    model = CrossingModel(**MODEL_CFG).to(DEVICE)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=MIN_LR, weight_decay=1e-4)
     scaler = GradScaler("cuda")
 
     best_composite = float("inf")
     best_epoch = -1
-    best_ade = 0.0
+    best_ade = float("inf")
     best_per_h = []
     best_bce = 0.0
     patience_counter = 0
@@ -107,6 +119,10 @@ def main():
     t_start = time.time()
 
     for epoch in range(1, EPOCHS + 1):
+        lr = get_lr(epoch)
+        for pg in optimizer.param_groups:
+            pg["lr"] = lr
+
         model.train()
         total_loss_sum = 0.0
         n_batches = 0
@@ -131,18 +147,16 @@ def main():
             total_loss_sum += loss.item()
             n_batches += 1
 
-        scheduler.step()
         avg_loss = total_loss_sum / max(n_batches, 1)
 
         composite, mean_ade, per_h_ade, bce = evaluate(model, dev_dl)
-        lr = optimizer.param_groups[0]["lr"]
 
-        h_str = ", ".join(f"H{i+1}: {a:.1f}" for i, a in enumerate(per_h_ade))
-        print(f"Epoch {epoch:3d}/{EPOCHS} | Train Loss: {avg_loss:.2f} | "
-              f"Dev Composite: {composite:.4f} | ADE: {mean_ade:.1f} px [{h_str}] | "
-              f"BCE: {bce:.4f} | LR: {lr:.5f}")
+        h_str = " ".join(f"H{i+1}:{a:.1f}" for i, a in enumerate(per_h_ade))
+        print(f"Epoch {epoch:3d}/{EPOCHS} | Loss: {avg_loss:.2f} | "
+              f"Dev: {composite:.4f} | ADE: {mean_ade:.1f} [{h_str}] | "
+              f"BCE: {bce:.4f} | LR: {lr:.6f}")
 
-        if composite < best_composite:
+        if mean_ade < best_ade:
             best_composite = composite
             best_epoch = epoch
             best_ade = mean_ade
@@ -150,9 +164,8 @@ def main():
             best_bce = bce
             patience_counter = 0
             torch.save(model.state_dict(), "best_model.pt")
-            config = {"input_dim": 8, "hidden_dim": 128, "num_layers": 2, "dropout": 0.2}
             with open("model_config.json", "w") as f:
-                json.dump(config, f)
+                json.dump(MODEL_CFG, f)
         else:
             patience_counter += 1
             if patience_counter >= PATIENCE:
@@ -160,14 +173,14 @@ def main():
                 break
 
     elapsed = time.time() - t_start
-    h_str = ", ".join(f"H{i+1}: {a:.1f}" for i, a in enumerate(best_per_h))
+    h_str = " ".join(f"H{i+1}:{a:.1f}" for i, a in enumerate(best_per_h))
     print(f"\nTRAINING COMPLETE ({elapsed:.0f}s)")
     print(f"Best epoch: {best_epoch}")
     print(f"Best dev composite: {best_composite:.4f}")
     print(f"Best dev ADE: {best_ade:.1f} px [{h_str}]")
     print(f"Best dev BCE: {best_bce:.4f}")
-    print(f"Baseline was: 0.8311")
-    print(f"Improvement: {0.8311 - best_composite:.4f}")
+    print(f"Previous best: 0.7123")
+    print(f"Improvement: {0.7123 - best_composite:.4f}")
 
 
 if __name__ == "__main__":

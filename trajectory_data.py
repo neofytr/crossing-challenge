@@ -25,6 +25,7 @@ class TrajectoryDataset(Dataset):
         fh = float(row["frame_h"])
 
         hist = np.stack([np.asarray(b, dtype=np.float64) for b in row["bbox_history"]])  # (16, 4)
+
         cx = (hist[:, 0] + hist[:, 2]) * 0.5
         cy = (hist[:, 1] + hist[:, 3]) * 0.5
         w = hist[:, 2] - hist[:, 0]
