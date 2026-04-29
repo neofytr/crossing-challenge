@@ -2,11 +2,11 @@
 
 ## Final score
 
-Dev composite score: **0.6507** (from `python grade.py`)
+Dev composite score: **0.6388** (from `python grade.py`)
 
-- Intent BCE: 0.1970 (baseline: 0.2129)
+- Intent BCE: 0.1911 (baseline: 0.2129)
 - Trajectory mean ADE: 25.4 px (baseline: 40.2 px)
-- 21.7% improvement over baseline
+- 23.1% improvement over baseline
 
 ---
 
@@ -14,9 +14,9 @@ Dev composite score: **0.6507** (from `python grade.py`)
 
 Hybrid architecture combining XGBoost for intent classification with a bidirectional GRU for trajectory prediction.
 
-**Trajectory model:** 2-layer bidirectional GRU (hidden_dim=128, ~546k params) trained on normalized 16-frame sequences with Huber loss (delta=15.0) and horizon-weighted objectives (H3: 1.5x, H4: 2.0x). Each timestep has 10 features: normalized bbox center/size, frame-to-frame velocity, ego speed, ego yaw, and acceleration (ax, ay). Five models trained with different seeds ensembled with test-time horizontal flip augmentation (10 predictions averaged). XGBoost trajectory regressors trained per-horizon and blended with GRU predictions at optimal weights.
+**Trajectory model:** 2-layer bidirectional GRU (hidden_dim=128, ~546k params) trained on normalized 16-frame sequences with Huber loss (delta=15.0) and horizon-weighted objectives (H3: 1.5x, H4: 2.0x). Each timestep has 10 features: normalized bbox center/size, frame-to-frame velocity, ego speed, ego yaw, and acceleration (ax, ay). Three models (seeds 42, 123, 456) ensembled with test-time horizontal flip augmentation (6 predictions averaged). XGBoost trajectory regressors trained per-horizon and blended with GRU predictions at optimal weights.
 
-**Intent model:** XGBoost classifier with 47 engineered features — positional, velocity, acceleration, ego vehicle, weather/time, plus motion dynamics (displacement, heading, aspect ratio changes, lateral/longitudinal ratios, stationarity). Tuned with early stopping.
+**Intent model:** CatBoost classifier with 47 engineered features — positional, velocity, acceleration, ego vehicle, weather/time, plus motion dynamics (displacement, heading, aspect ratio changes, lateral/longitudinal ratios, stationarity). Hyperparameters tuned via Optuna Bayesian optimization (150 trials CatBoost vs 150 trials XGBoost; CatBoost won). Early stopping at 421 iterations.
 
 **Training data:** Re-sliced JAAD+PIE tracklets with stride=2 (vs original stride=5), producing 70,737 training windows — 2.5x more than the starter's 28,680. Speed perturbation augmentation (30% chance, scale 0.85-1.15) during GRU training.
 
@@ -34,6 +34,10 @@ Hybrid architecture combining XGBoost for intent classification with a bidirecti
 
 5. **XGBoost residual trajectory correction** — training XGBoost to predict GRU trajectory errors (residuals) instead of raw targets. Residual ADE 25.2 vs blend ADE 25.1. The convex blend approach is slightly better because it constrains the XGBoost to not over-correct.
 
+6. **Cross-attention trajectory decoder** — replacing the MLP trajectory head with learned horizon queries and multi-head cross-attention over GRU outputs. ADE 26.9 vs MLP's 26.6. For 16-step sequences, the GRU's last hidden state already captures temporal info; attention adds parameters without benefit.
+
+7. **Gaussian NLL loss** — predicting per-coordinate variance alongside position to learn heteroscedastic uncertainty. The model exploits variance prediction to minimize NLL without improving point estimates — loss goes negative (-5.42) while BCE explodes to 0.3665. Fundamentally flawed for this task.
+
 ---
 
 ## Where AI tooling sped me up most
@@ -46,7 +50,6 @@ Used **Claude Code** throughout. Biggest acceleration was in the experiment loop
 
 - **Transformer encoder** replacing GRU — global self-attention over all 16 timesteps with learned positional encoding. Also enables migration to a custom C deep learning framework (Axiom) that has MHA but no RNN primitives.
 - **Autoregressive trajectory decoder** — predict each horizon conditioned on the previous prediction, rather than all 4 from a single context vector. Should help long-horizon ADE specifically.
-- **GRU encoder stacking for intent** — extract the GRU's learned 256-dim context vector and feed it as additional features to XGBoost. Gives the classifier access to temporal representations that hand-crafted features can't capture.
 - **Ego-motion compensated coordinates** — subtract estimated ego-induced pixel displacement from observed trajectories before feeding to the model.
 
 ---
@@ -74,15 +77,17 @@ cp data/dev_original.parquet data/dev.parquet  # restore original dev set
 # Train intent model
 python baseline.py
 
-# Train trajectory models (5 seeds)
+# Train trajectory models (3 seeds)
 python train.py --seed 42 --output best_model_s42.pt
 python train.py --seed 123 --output best_model_s123.pt
 python train.py --seed 456 --output best_model_s456.pt
-python train.py --seed 789 --output best_model_s789.pt
-python train.py --seed 1 --output best_model_s1.pt
 
 # Train trajectory XGB blending
 python traj_xgb.py
+
+# Tune intent classifier (CatBoost vs XGBoost via Optuna)
+pip install catboost optuna
+python tune_intent.py
 
 # Score
 python grade.py

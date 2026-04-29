@@ -12,3 +12,4 @@ data/eval.parquet
 
 # Hashing salt — used by data/build_windows.py; never ship
 .hash_salt
+catboost_info/
