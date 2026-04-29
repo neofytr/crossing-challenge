@@ -2,11 +2,11 @@
 
 ## Final score
 
-Dev composite score: **0.6603** (from `python grade.py`)
+Dev composite score: **0.6507** (from `python grade.py`)
 
-- Intent BCE: 0.1973 (baseline: 0.2129)
-- Trajectory mean ADE: 26.3 px (baseline: 40.2 px)
-- 20.5% improvement over baseline
+- Intent BCE: 0.1970 (baseline: 0.2129)
+- Trajectory mean ADE: 25.4 px (baseline: 40.2 px)
+- 21.7% improvement over baseline
 
 ---
 
@@ -14,11 +14,11 @@ Dev composite score: **0.6603** (from `python grade.py`)
 
 Hybrid architecture combining XGBoost for intent classification with a bidirectional GRU for trajectory prediction.
 
-**Trajectory model:** 2-layer bidirectional GRU (hidden_dim=128, ~546k params) trained on normalized 16-frame sequences. Each timestep has 8 features: normalized bbox center/size, frame-to-frame velocity, ego speed, and ego yaw. The model predicts center displacements at 4 horizons — only centers affect ADE scoring, so bbox width/height are held constant. Three models trained with different seeds are ensembled with test-time horizontal flip augmentation (6 predictions per sample, averaged).
+**Trajectory model:** 2-layer bidirectional GRU (hidden_dim=128, ~546k params) trained on normalized 16-frame sequences with Huber loss (delta=15.0) and horizon-weighted objectives (H3: 1.5x, H4: 2.0x). Each timestep has 10 features: normalized bbox center/size, frame-to-frame velocity, ego speed, ego yaw, and acceleration (ax, ay). Five models trained with different seeds ensembled with test-time horizontal flip augmentation (10 predictions averaged). XGBoost trajectory regressors trained per-horizon and blended with GRU predictions at optimal weights.
 
-**Intent model:** XGBoost classifier with 30 engineered features — the original 20 positional/ego features plus 10 motion dynamics features (total displacement, velocity magnitude, heading angle, acceleration, bbox size change rate, area ratio, vertical position). Tuned with early stopping, subsample=0.8, colsample_bytree=0.8.
+**Intent model:** XGBoost classifier with 47 engineered features — positional, velocity, acceleration, ego vehicle, weather/time, plus motion dynamics (displacement, heading, aspect ratio changes, lateral/longitudinal ratios, stationarity). Tuned with early stopping.
 
-**Training data:** Re-sliced JAAD+PIE tracklets with stride=2 (vs original stride=5), producing 70,737 training windows — 2.5x more than the starter's 28,680. This helped intent (BCE -3.3%) more than trajectory.
+**Training data:** Re-sliced JAAD+PIE tracklets with stride=2 (vs original stride=5), producing 70,737 training windows — 2.5x more than the starter's 28,680. Speed perturbation augmentation (30% chance, scale 0.85-1.15) during GRU training.
 
 ---
 
@@ -29,6 +29,10 @@ Hybrid architecture combining XGBoost for intent classification with a bidirecti
 2. **Larger GRU + temporal attention** — hidden_dim=256 with a learned temporal attention mechanism overfitted on both 28k and 70k samples. The best it achieved was 27.3 px ADE (vs 27.3 with the simpler model). The 16-step input sequence is too short for attention to provide meaningful benefit over the GRU's built-in recency bias.
 
 3. **Constant-velocity residual skip connection** — adding an explicit CV baseline as a skip connection (model predicts correction to CV) regressed ADE from 27.3 to 31.6 px. The GRU already learns velocity patterns from the raw input; the skip connection constrained rather than helped.
+
+4. **GRU encoder stacking for intent** — extracted 256-dim GRU encoder features and fed them alongside 47 hand-crafted features to XGBoost. BCE worsened from 0.2011 to 0.2087. High-dimensional neural representations add noise to gradient boosting.
+
+5. **XGBoost residual trajectory correction** — training XGBoost to predict GRU trajectory errors (residuals) instead of raw targets. Residual ADE 25.2 vs blend ADE 25.1. The convex blend approach is slightly better because it constrains the XGBoost to not over-correct.
 
 ---
 
@@ -70,10 +74,15 @@ cp data/dev_original.parquet data/dev.parquet  # restore original dev set
 # Train intent model
 python baseline.py
 
-# Train trajectory models (3 seeds)
+# Train trajectory models (5 seeds)
 python train.py --seed 42 --output best_model_s42.pt
 python train.py --seed 123 --output best_model_s123.pt
 python train.py --seed 456 --output best_model_s456.pt
+python train.py --seed 789 --output best_model_s789.pt
+python train.py --seed 1 --output best_model_s1.pt
+
+# Train trajectory XGB blending
+python traj_xgb.py
 
 # Score
 python grade.py
