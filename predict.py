@@ -116,6 +116,44 @@ def _engineered_features(req: dict) -> np.ndarray:
         area_ratio,
         lower_half,
     ])
+
+    vx_to_vy_ratio = np.abs(vx[-4:].mean()) / (np.abs(vy[-4:].mean()) + 1e-6)
+    vx_2 = vx[-2:].mean() / fw if len(vx) >= 2 else 0.0
+    vy_2 = vy[-2:].mean() / fh if len(vy) >= 2 else 0.0
+    vx_8 = vx[-8:].mean() / fw if len(vx) >= 8 else vx.mean() / fw
+    vy_8 = vy[-8:].mean() / fh if len(vy) >= 8 else vy.mean() / fh
+    vx_trend = (vx[-2:].mean() - vx[-8:].mean()) / fw if len(vx) >= 8 else 0.0
+    proximity_center_x = abs(cx[-1] / fw - 0.5)
+    ego_speed_change = ego_s[-1] - ego_s[0]
+    ego_ped_interaction = ego_s[-1] * abs(vx[-4:].mean()) / fw
+    bbox_area = (w[-1] * h[-1]) / (fw * fh)
+    ar_current = h[-1] / (w[-1] + 1e-6)
+    ar_first = h[0] / (w[0] + 1e-6)
+    aspect_ratio_change = ar_current - ar_first
+    max_lateral_speed = np.abs(vx).max() / fw
+    lateral_disp = abs(cx[-1] - cx[0]) / fw
+    longitudinal_disp = abs(cy[-1] - cy[0]) / fh
+    lat_to_long_disp_ratio = lateral_disp / (longitudinal_disp + 1e-6)
+    speed_per_frame = np.sqrt(np.concatenate([[0], vx])**2 + np.concatenate([[0], vy])**2)
+    stationary_frames = float(np.sum(speed_per_frame < 1.0)) / 16.0
+    vx_sign_changes = float(np.sum(np.diff(np.sign(vx)) != 0)) / 14.0
+
+    feats.extend([
+        min(vx_to_vy_ratio, 10.0),
+        vx_2, vy_2, vx_8, vy_8,
+        vx_trend,
+        proximity_center_x,
+        ego_speed_change,
+        ego_ped_interaction,
+        bbox_area,
+        aspect_ratio_change,
+        max_lateral_speed,
+        lateral_disp,
+        longitudinal_disp,
+        min(lat_to_long_disp_ratio, 10.0),
+        stationary_frames,
+        vx_sign_changes,
+    ])
     return np.asarray(feats, dtype=np.float32)
 
 
