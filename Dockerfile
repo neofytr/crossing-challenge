@@ -14,7 +14,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY predict.py grade.py trajectory_model.py ./
-COPY model.pkl model_config.json ./
+COPY model.pkl model_config.json traj_xgb.pkl ./
 COPY best_model_s42.pt best_model_s123.pt best_model_s456.pt ./
 
 ENTRYPOINT ["python", "grade.py"]

@@ -11,11 +11,13 @@ from trajectory_model import CrossingModel
 
 MODEL_PATH = Path(__file__).parent / "model.pkl"
 GRU_CONFIG = Path(__file__).parent / "model_config.json"
+TRAJ_XGB_PATH = Path(__file__).parent / "traj_xgb.pkl"
 HORIZON_KEYS = ["bbox_500ms", "bbox_1000ms", "bbox_1500ms", "bbox_2000ms"]
 MODEL_SEEDS = [42, 123, 456]
 
 _cached_xgb = None
 _cached_gru_models = None
+_cached_traj_xgb = None
 
 
 def _load_xgb():
@@ -48,6 +50,33 @@ def _load_gru_models():
 
     _cached_gru_models = models
     return models
+
+
+def _load_traj_xgb():
+    global _cached_traj_xgb
+    if _cached_traj_xgb is None and TRAJ_XGB_PATH.exists():
+        with open(TRAJ_XGB_PATH, "rb") as f:
+            _cached_traj_xgb = pickle.load(f)
+    return _cached_traj_xgb
+
+
+def _traj_xgb_features(req: dict) -> np.ndarray:
+    hand = _engineered_features(req)
+    hist = _as_2d(req["bbox_history"])
+    cx = (hist[:, 0] + hist[:, 2]) * 0.5
+    cy = (hist[:, 1] + hist[:, 3]) * 0.5
+    fw, fh = float(req["frame_w"]), float(req["frame_h"])
+    t = np.arange(4)
+    px = np.polyfit(t, cx[-4:], 1)
+    py = np.polyfit(t, cy[-4:], 1)
+    extra = np.array([
+        px[0] / fw, py[0] / fh, px[1] / fw, py[1] / fh,
+        float(cx[-1] - cx[-4]) / fw,
+        float(cy[-1] - cy[-4]) / fh,
+        float(cx[-1] - cx[-8]) / fw if len(cx) >= 8 else 0.0,
+        float(cy[-1] - cy[-8]) / fh if len(cy) >= 8 else 0.0,
+    ], dtype=np.float32)
+    return np.concatenate([hand, extra]).reshape(1, -1)
 
 
 def _as_2d(x) -> np.ndarray:
@@ -243,6 +272,21 @@ def predict(request: dict) -> dict:
     cur_h = hist[-1, 3] - hist[-1, 1]
     fw = float(request["frame_w"])
     fh = float(request["frame_h"])
+
+    traj_xgb_data = _load_traj_xgb()
+    if traj_xgb_data is not None:
+        traj_feats = _traj_xgb_features(request)
+        if not np.isfinite(traj_feats).all():
+            traj_feats = np.nan_to_num(traj_feats, nan=0.0, posinf=0.0, neginf=0.0)
+        xgb_models = traj_xgb_data["models"]
+        blend_w = traj_xgb_data["blend_weights"]
+        for h in range(4):
+            xgb_dx = float(xgb_models[f"h{h}_dx"].predict(traj_feats)[0])
+            xgb_dy = float(xgb_models[f"h{h}_dy"].predict(traj_feats)[0])
+            gru_dx = traj_delta[h, 0] * fw
+            gru_dy = traj_delta[h, 1] * fh
+            traj_delta[h, 0] = (blend_w[h] * xgb_dx + (1 - blend_w[h]) * gru_dx) / fw
+            traj_delta[h, 1] = (blend_w[h] * xgb_dy + (1 - blend_w[h]) * gru_dy) / fh
 
     out: dict[str, object] = {"intent": intent_prob}
     for i, key in enumerate(HORIZON_KEYS):
