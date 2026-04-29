@@ -13,7 +13,7 @@ MODEL_PATH = Path(__file__).parent / "model.pkl"
 GRU_CONFIG = Path(__file__).parent / "model_config.json"
 TRAJ_XGB_PATH = Path(__file__).parent / "traj_xgb.pkl"
 HORIZON_KEYS = ["bbox_500ms", "bbox_1000ms", "bbox_1500ms", "bbox_2000ms"]
-MODEL_SEEDS = [42, 123, 456]
+MODEL_SEEDS = [42, 123, 456, 789, 1]
 
 _cached_xgb = None
 _cached_gru_models = None
