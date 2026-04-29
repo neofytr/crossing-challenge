@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import argparse
 import json
+import random
 import time
 
 import numpy as np
@@ -100,9 +102,28 @@ def get_lr(epoch):
     return MIN_LR + 0.5 * (BASE_LR - MIN_LR) * (1 + np.cos(np.pi * t / remaining))
 
 
+def seed_worker(worker_id):
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
+
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--output", type=str, default="best_model.pt")
+    args = parser.parse_args()
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+
+    print(f"Seed: {args.seed}, Output: {args.output}")
     print("Building dataloaders...")
-    train_dl, dev_dl = build_dataloaders(BATCH_SIZE)
+    g = torch.Generator()
+    g.manual_seed(args.seed)
+    train_dl, dev_dl = build_dataloaders(BATCH_SIZE, worker_init_fn=seed_worker, generator=g)
     print(f"Train batches: {len(train_dl)}, Dev batches: {len(dev_dl)}")
 
     model = CrossingModel(**MODEL_CFG).to(DEVICE)
@@ -163,7 +184,7 @@ def main():
             best_per_h = per_h_ade[:]
             best_bce = bce
             patience_counter = 0
-            torch.save(model.state_dict(), "best_model.pt")
+            torch.save(model.state_dict(), args.output)
             with open("model_config.json", "w") as f:
                 json.dump(MODEL_CFG, f)
         else:

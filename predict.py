@@ -10,12 +10,12 @@ import torch
 from trajectory_model import CrossingModel
 
 MODEL_PATH = Path(__file__).parent / "model.pkl"
-GRU_WEIGHTS = Path(__file__).parent / "best_model.pt"
 GRU_CONFIG = Path(__file__).parent / "model_config.json"
 HORIZON_KEYS = ["bbox_500ms", "bbox_1000ms", "bbox_1500ms", "bbox_2000ms"]
+MODEL_SEEDS = [42, 123, 456]
 
 _cached_xgb = None
-_cached_gru = None
+_cached_gru_models = None
 
 
 def _load_xgb():
@@ -26,16 +26,24 @@ def _load_xgb():
     return _cached_xgb
 
 
-def _load_gru():
-    global _cached_gru
-    if _cached_gru is None:
-        with open(GRU_CONFIG) as f:
-            cfg = json.load(f)
+def _load_gru_models():
+    global _cached_gru_models
+    if _cached_gru_models is not None:
+        return _cached_gru_models
+
+    with open(GRU_CONFIG) as f:
+        cfg = json.load(f)
+
+    models = []
+    for seed in MODEL_SEEDS:
         model = CrossingModel(**cfg)
-        model.load_state_dict(torch.load(GRU_WEIGHTS, map_location="cpu", weights_only=True))
+        path = Path(__file__).parent / f"best_model_s{seed}.pt"
+        model.load_state_dict(torch.load(path, map_location="cpu", weights_only=True))
         model.eval()
-        _cached_gru = model
-    return _cached_gru
+        models.append(model)
+
+    _cached_gru_models = models
+    return models
 
 
 def _as_2d(x) -> np.ndarray:
@@ -110,7 +118,6 @@ def _build_gru_input(req: dict) -> torch.Tensor:
 
 
 def predict(request: dict) -> dict:
-    # --- Intent via XGBoost ---
     xgb = _load_xgb()
     feats = _engineered_features(request).reshape(1, -1)
     if not np.isfinite(feats).all():
@@ -119,12 +126,26 @@ def predict(request: dict) -> dict:
     if not np.isfinite(intent_prob):
         intent_prob = 0.5
 
-    # --- Trajectory via GRU ---
-    gru = _load_gru()
-    gru_input = _build_gru_input(request)
-    with torch.no_grad():
-        traj_delta, _ = gru(gru_input)  # [1, 4, 2] normalized deltas
-    traj_delta = traj_delta.squeeze(0).numpy()  # [4, 2]
+    models = _load_gru_models()
+    input_orig = _build_gru_input(request)
+
+    input_flip = input_orig.clone()
+    input_flip[0, :, 0] = 1.0 - input_flip[0, :, 0]
+    input_flip[0, :, 4] = -input_flip[0, :, 4]
+    input_flip[0, :, 7] = -input_flip[0, :, 7]
+
+    all_traj_preds = []
+    for model in models:
+        with torch.no_grad():
+            traj_orig, _ = model(input_orig)
+            all_traj_preds.append(traj_orig)
+
+            traj_flip, _ = model(input_flip)
+            traj_flip[:, :, 0] = -traj_flip[:, :, 0]
+            all_traj_preds.append(traj_flip)
+
+    traj_avg = torch.stack(all_traj_preds).mean(dim=0)
+    traj_delta = traj_avg.squeeze(0).numpy()  # [4, 2]
 
     hist = _as_2d(request["bbox_history"])
     cur_cx = (hist[-1, 0] + hist[-1, 2]) * 0.5

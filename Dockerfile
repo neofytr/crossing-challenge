@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY predict.py grade.py trajectory_model.py ./
-COPY model.pkl best_model.pt model_config.json ./
+COPY model.pkl model_config.json ./
+COPY best_model_s42.pt best_model_s123.pt best_model_s456.pt ./
 
 ENTRYPOINT ["python", "grade.py"]

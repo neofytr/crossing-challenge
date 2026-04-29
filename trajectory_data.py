@@ -88,11 +88,12 @@ class TrajectoryDataset(Dataset):
         )
 
 
-def build_dataloaders(batch_size: int = 256):
+def build_dataloaders(batch_size: int = 256, worker_init_fn=None, generator=None):
     train_ds = TrajectoryDataset(DATA / "train.parquet", augment=True)
     dev_ds = TrajectoryDataset(DATA / "dev.parquet", augment=False)
     train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
-                          pin_memory=True, num_workers=2, drop_last=True)
+                          pin_memory=True, num_workers=2, drop_last=True,
+                          worker_init_fn=worker_init_fn, generator=generator)
     dev_dl = DataLoader(dev_ds, batch_size=batch_size, shuffle=False,
                         pin_memory=True, num_workers=2)
     return train_dl, dev_dl
