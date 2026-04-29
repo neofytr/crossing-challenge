@@ -55,15 +55,27 @@ class TrajectoryDataset(Dataset):
 
         intent = float(row["will_cross_2s"])
 
-        # Horizontal flip augmentation
-        if self.augment and torch.rand(1).item() < 0.5:
-            cx = fw - cx
-            dx = -dx
-            ego_yaw = -ego_yaw
-            cur_cx = fw - cur_cx
-            targets[:, 0] = -targets[:, 0]
+        ax = np.zeros(16, dtype=np.float64)
+        ay = np.zeros(16, dtype=np.float64)
+        ax[2:] = np.diff(dx[1:])
+        ay[2:] = np.diff(dy[1:])
 
-        # Build input sequence [16, 8]
+        if self.augment:
+            if torch.rand(1).item() < 0.5:
+                cx = fw - cx
+                dx = -dx
+                ax = -ax
+                ego_yaw = -ego_yaw
+                cur_cx = fw - cur_cx
+                targets[:, 0] = -targets[:, 0]
+            if torch.rand(1).item() < 0.3:
+                speed_scale = 0.85 + torch.rand(1).item() * 0.30
+                dx = dx * speed_scale
+                dy = dy * speed_scale
+                ax = ax * speed_scale
+                ay = ay * speed_scale
+                targets = targets * speed_scale
+
         seq = np.stack([
             cx / fw,
             cy / fh,
@@ -73,7 +85,9 @@ class TrajectoryDataset(Dataset):
             dy / fh,
             np.clip(ego_speed, 0.0, 20.0) / 20.0,
             np.clip(ego_yaw, -10.0, 10.0) / 10.0,
-        ], axis=-1)  # (16, 8)
+            ax / fw,
+            ay / fh,
+        ], axis=-1)  # (16, 10)
 
         seq = np.nan_to_num(seq, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
         targets = np.nan_to_num(targets, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)

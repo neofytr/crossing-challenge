@@ -202,6 +202,11 @@ def _build_gru_input(req: dict) -> torch.Tensor:
     dx[1:] = np.diff(cx)
     dy[1:] = np.diff(cy)
 
+    ax = np.zeros(16, dtype=np.float64)
+    ay = np.zeros(16, dtype=np.float64)
+    ax[2:] = np.diff(dx[1:])
+    ay[2:] = np.diff(dy[1:])
+
     fw = float(req["frame_w"])
     fh = float(req["frame_h"])
     ego_speed = np.asarray(req["ego_speed_history"], dtype=np.float64)
@@ -216,10 +221,12 @@ def _build_gru_input(req: dict) -> torch.Tensor:
         dy / fh,
         np.clip(ego_speed, 0.0, 20.0) / 20.0,
         np.clip(ego_yaw, -10.0, 10.0) / 10.0,
+        ax / fw,
+        ay / fh,
     ], axis=-1)
 
     seq = np.nan_to_num(seq, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
-    return torch.from_numpy(seq).unsqueeze(0)  # [1, 16, 8]
+    return torch.from_numpy(seq).unsqueeze(0)  # [1, 16, 10]
 
 
 def predict(request: dict) -> dict:

@@ -23,7 +23,7 @@ WARMUP_EPOCHS = 5
 BASE_LR = 8e-4
 MIN_LR = 1e-5
 
-MODEL_CFG = {"input_dim": 8, "hidden_dim": 128, "num_layers": 2, "dropout": 0.2}
+MODEL_CFG = {"input_dim": 10, "hidden_dim": 128, "num_layers": 2, "dropout": 0.2}
 
 
 def compute_loss(pred_traj, true_traj, pred_intent, true_intent, frame_wh):
@@ -32,11 +32,16 @@ def compute_loss(pred_traj, true_traj, pred_intent, true_intent, frame_wh):
     true_px = true_traj * scale
 
     diff = pred_px - true_px
-    ade_per_horizon = torch.sqrt((diff ** 2).sum(dim=-1) + 1e-6)
+    huber_delta = 15.0
+    abs_diff = torch.abs(diff)
+    huber = torch.where(abs_diff < huber_delta,
+                        0.5 * diff**2 / huber_delta,
+                        abs_diff - 0.5 * huber_delta)
+    huber_per_horizon = huber.sum(dim=-1)
 
-    horizon_weights = torch.tensor([1.0, 1.0, 1.5, 2.0], device=ade_per_horizon.device)
-    weighted_ade = (ade_per_horizon * horizon_weights).sum(dim=-1) / horizon_weights.sum()
-    traj_loss = weighted_ade.mean()
+    horizon_weights = torch.tensor([1.0, 1.0, 1.5, 2.0], device=huber_per_horizon.device)
+    weighted = (huber_per_horizon * horizon_weights).sum(dim=-1) / horizon_weights.sum()
+    traj_loss = weighted.mean()
 
     with torch.amp.autocast("cuda", enabled=False):
         intent_loss = F.binary_cross_entropy(pred_intent.float(), true_intent.float())
