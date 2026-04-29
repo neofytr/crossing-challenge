@@ -82,6 +82,40 @@ def _engineered_features(req: dict) -> np.ndarray:
         1.0 if req.get("weather") == "rain" else 0.0,
         1.0 if req.get("weather") == "snow" else 0.0,
     ]
+
+    diag = np.sqrt(fw**2 + fh**2)
+    total_disp = np.sqrt((cx[-1] - cx[0])**2 + (cy[-1] - cy[0])**2) / diag
+
+    vx_recent = vx[-4:].mean()
+    vy_recent = vy[-4:].mean()
+    vel_magnitude = np.sqrt(vx_recent**2 + vy_recent**2) / diag
+    heading = np.arctan2(vy_recent, vx_recent) / np.pi
+
+    if len(vx) >= 5:
+        ax_recent = np.diff(vx[-5:]).mean() / fw
+        ay_recent = np.diff(vy[-5:]).mean() / fh
+    else:
+        ax_recent = 0.0
+        ay_recent = 0.0
+    accel_magnitude = np.sqrt(ax_recent**2 + ay_recent**2)
+
+    w_change_rate = (w[-1] - w[0]) / (15.0 * fw)
+    h_change_rate = (h[-1] - h[0]) / (15.0 * fh)
+    area_ratio = (w[-1] * h[-1]) / (w[0] * h[0] + 1e-6)
+    lower_half = 1.0 if cy[-1] > fh / 2 else 0.0
+
+    feats.extend([
+        total_disp,
+        vel_magnitude,
+        heading,
+        ax_recent,
+        ay_recent,
+        accel_magnitude,
+        w_change_rate,
+        h_change_rate,
+        area_ratio,
+        lower_half,
+    ])
     return np.asarray(feats, dtype=np.float32)
 
 

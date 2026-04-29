@@ -70,12 +70,16 @@ def main() -> None:
     print("\nTraining XGBClassifier (no class rebalancing — want calibrated probs)...")
     t0 = time.time()
     clf = XGBClassifier(
-        n_estimators=300,
-        max_depth=5,
+        n_estimators=500,
+        max_depth=6,
         learning_rate=0.05,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        min_child_weight=5,
         tree_method="hist",
         n_jobs=-1,
         eval_metric="logloss",
+        early_stopping_rounds=30,
     )
     clf.fit(X_train, y_train, eval_set=[(X_dev, y_dev)], verbose=False)
     print(f"  {time.time() - t0:.1f}s")
