@@ -16,9 +16,9 @@ from trajectory_model import CrossingModel
 BCE_FLOOR = 0.2488
 ADE_FLOOR = 49.80
 DEVICE = "cuda"
-EPOCHS = 150
-PATIENCE = 30
-BATCH_SIZE = 256
+EPOCHS = 80
+PATIENCE = 15
+BATCH_SIZE = 512
 WARMUP_EPOCHS = 5
 BASE_LR = 8e-4
 MIN_LR = 1e-5

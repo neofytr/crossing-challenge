@@ -1,0 +1,5 @@
+-r requirements.txt
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch>=2.0,<3
+tqdm>=4.66,<5
+pytest>=7.4,<10
