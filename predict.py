@@ -258,6 +258,7 @@ def predict(request: dict) -> dict:
     input_flip[0, :, 0] = 1.0 - input_flip[0, :, 0]
     input_flip[0, :, 4] = -input_flip[0, :, 4]
     input_flip[0, :, 7] = -input_flip[0, :, 7]
+    input_flip[0, :, 8] = -input_flip[0, :, 8]
 
     all_traj_preds = []
     for model in models:

@@ -88,6 +88,7 @@ def get_gru_predictions(df, models):
         batch_flip[:, :, 0] = 1.0 - batch_flip[:, :, 0]
         batch_flip[:, :, 4] = -batch_flip[:, :, 4]
         batch_flip[:, :, 7] = -batch_flip[:, :, 7]
+        batch_flip[:, :, 8] = -batch_flip[:, :, 8]
 
         traj_preds = []
         for model in models:
