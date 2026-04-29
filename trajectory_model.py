@@ -31,10 +31,13 @@ class CrossingModel(nn.Module):
         total = sum(p.numel() for p in self.parameters())
         print(f"CrossingModel: {total:,} parameters")
 
-    def forward(self, x):
+    def encode(self, x):
         x = self.layer_norm(self.input_proj(x))
         gru_out, _ = self.gru(x)
-        last = gru_out[:, -1, :]
+        return gru_out[:, -1, :]
+
+    def forward(self, x):
+        last = self.encode(x)
         traj = self.traj_head(last).view(-1, 4, 2)
         intent = self.intent_head(last).squeeze(-1)
         return traj, intent

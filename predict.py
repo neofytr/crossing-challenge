@@ -22,7 +22,11 @@ def _load_xgb():
     global _cached_xgb
     if _cached_xgb is None:
         with open(MODEL_PATH, "rb") as f:
-            _cached_xgb = pickle.load(f)["intent"]
+            data = pickle.load(f)
+        if isinstance(data, dict) and data.get("stacked"):
+            _cached_xgb = data
+        else:
+            _cached_xgb = {"intent": data["intent"], "stacked": False}
     return _cached_xgb
 
 
@@ -190,16 +194,29 @@ def _build_gru_input(req: dict) -> torch.Tensor:
 
 
 def predict(request: dict) -> dict:
-    xgb = _load_xgb()
+    xgb_data = _load_xgb()
     feats = _engineered_features(request).reshape(1, -1)
     if not np.isfinite(feats).all():
         feats = np.nan_to_num(feats, nan=0.0, posinf=1.0, neginf=-1.0)
-    intent_prob = float(xgb.predict_proba(feats)[0, 1])
-    if not np.isfinite(intent_prob):
-        intent_prob = 0.5
 
     models = _load_gru_models()
     input_orig = _build_gru_input(request)
+
+    if xgb_data.get("stacked"):
+        clf = xgb_data["intent"]
+        enc_list = []
+        for model in models:
+            with torch.no_grad():
+                enc_list.append(model.encode(input_orig))
+        gru_feats = torch.stack(enc_list).mean(dim=0).numpy()
+        stacked_feats = np.concatenate([feats, gru_feats], axis=1)
+        intent_prob = float(clf.predict_proba(stacked_feats)[0, 1])
+    else:
+        clf = xgb_data["intent"]
+        intent_prob = float(clf.predict_proba(feats)[0, 1])
+
+    if not np.isfinite(intent_prob):
+        intent_prob = 0.5
 
     input_flip = input_orig.clone()
     input_flip[0, :, 0] = 1.0 - input_flip[0, :, 0]
@@ -217,7 +234,7 @@ def predict(request: dict) -> dict:
             all_traj_preds.append(traj_flip)
 
     traj_avg = torch.stack(all_traj_preds).mean(dim=0)
-    traj_delta = traj_avg.squeeze(0).numpy()  # [4, 2]
+    traj_delta = traj_avg.squeeze(0).numpy()
 
     hist = _as_2d(request["bbox_history"])
     cur_cx = (hist[-1, 0] + hist[-1, 2]) * 0.5
