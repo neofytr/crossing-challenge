@@ -5,8 +5,8 @@ import torch.nn as nn
 
 
 class CrossingModel(nn.Module):
-    def __init__(self, input_dim: int = 8, hidden_dim: int = 128,
-                 num_layers: int = 2, dropout: float = 0.2):
+    def __init__(self, input_dim: int = 10, hidden_dim: int = 128,
+                 num_layers: int = 2, dropout: float = 0.2, **kwargs):
         super().__init__()
         self.input_proj = nn.Linear(input_dim, hidden_dim)
         self.layer_norm = nn.LayerNorm(hidden_dim)

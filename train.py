@@ -22,8 +22,9 @@ BATCH_SIZE = 512
 WARMUP_EPOCHS = 5
 BASE_LR = 8e-4
 MIN_LR = 1e-5
+INTENT_WEIGHT = 50.0
 
-MODEL_CFG = {"input_dim": 10, "hidden_dim": 128, "num_layers": 2, "dropout": 0.2}
+MODEL_CFG = {"input_dim": 10, "hidden_dim": 128, "num_layers": 2, "dropout": 0.2, "num_heads": 4}
 
 
 def compute_loss(pred_traj, true_traj, pred_intent, true_intent, frame_wh):
@@ -46,7 +47,7 @@ def compute_loss(pred_traj, true_traj, pred_intent, true_intent, frame_wh):
     with torch.amp.autocast("cuda", enabled=False):
         intent_loss = F.binary_cross_entropy(pred_intent.float(), true_intent.float())
 
-    total_loss = traj_loss + intent_loss * 50.0
+    total_loss = traj_loss + intent_loss * INTENT_WEIGHT
     return total_loss, traj_loss, intent_loss
 
 

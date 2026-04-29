@@ -46,7 +46,7 @@ PAST_LEN = 16          # frames at 15 Hz
 FUTURE_LEN = 30        # 2 s at 15 Hz
 HORIZON_IDX = [8, 15, 23, 30]   # +0.53, +1.0, +1.53, +2.0 s (at 15 Hz)
 WINDOW_LEN = PAST_LEN + FUTURE_LEN
-STRIDE = 5             # every 0.33 s at 15 Hz
+STRIDE = 2             # every 0.13 s at 15 Hz
 
 SEED = 2024
 # With only ~400 videos and a 80/10/10 split, 10 % per holdout is only ~40

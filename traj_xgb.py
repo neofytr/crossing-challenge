@@ -14,7 +14,7 @@ from predict import _engineered_features, _build_gru_input
 from trajectory_model import CrossingModel
 
 DATA = Path(__file__).parent / "data"
-MODEL_SEEDS = [42, 123, 456, 789, 1]
+MODEL_SEEDS = [42, 123, 456]
 HORIZON_KEYS = ["bbox_500ms", "bbox_1000ms", "bbox_1500ms", "bbox_2000ms"]
 
 REQUEST_FIELDS = [
