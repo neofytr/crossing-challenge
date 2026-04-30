@@ -137,7 +137,10 @@ class TrajectoryDataset(Dataset):
 
 
 def build_dataloaders(batch_size: int = 256, worker_init_fn=None, generator=None):
-    train_ds = TrajectoryDataset(DATA / "train.parquet", augment=True)
+    train_path = DATA / "train_full.parquet"
+    if not train_path.exists():
+        train_path = DATA / "train.parquet"
+    train_ds = TrajectoryDataset(train_path, augment=True)
     dev_ds = TrajectoryDataset(DATA / "dev.parquet", augment=False)
     train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
                           pin_memory=True, num_workers=2, drop_last=True,

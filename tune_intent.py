@@ -89,7 +89,10 @@ def objective_xgb(trial, X_train, y_train, X_dev, y_dev):
 
 def main():
     print("Loading data...")
-    train = pd.read_parquet(DATA / "train.parquet")
+    train_path = DATA / "train_full.parquet"
+    if not train_path.exists():
+        train_path = DATA / "train.parquet"
+    train = pd.read_parquet(train_path)
     dev = pd.read_parquet(DATA / "dev.parquet")
 
     print("Featurizing...")

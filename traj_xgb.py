@@ -120,7 +120,10 @@ def build_meta_features(X_hand, gru_preds, gru_per_seed):
 
 def main():
     print("Loading data...")
-    train = pd.read_parquet(DATA / "train.parquet")
+    train_path = DATA / "train_full.parquet"
+    if not train_path.exists():
+        train_path = DATA / "train.parquet"
+    train = pd.read_parquet(train_path)
     dev = pd.read_parquet(DATA / "dev.parquet")
 
     print("Building trajectory features...")

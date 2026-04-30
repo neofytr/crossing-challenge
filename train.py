@@ -160,6 +160,13 @@ def main():
             tgt_intent = tgt_intent.squeeze(-1).to(DEVICE)
             frame_wh = frame_wh.to(DEVICE)
 
+            if torch.rand(1).item() < 0.3:
+                lam = np.random.beta(0.4, 0.4)
+                idx = torch.randperm(seq.size(0), device=seq.device)
+                seq = lam * seq + (1 - lam) * seq[idx]
+                tgt_traj = lam * tgt_traj + (1 - lam) * tgt_traj[idx]
+                tgt_intent = lam * tgt_intent + (1 - lam) * tgt_intent[idx]
+
             optimizer.zero_grad()
             with autocast("cuda"):
                 pred_traj, pred_intent = model(seq)

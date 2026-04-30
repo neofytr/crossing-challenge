@@ -9,9 +9,9 @@ composite = 0.5 * (BCE / 0.2488) + 0.5 * (mean_ADE / 49.80)
 ```
 Lower is better. 1.0 = zero-work baseline (class prior + zero velocity).
 
-## Current Best Scores (composite 0.6350)
-- Intent BCE: 0.1903 (intent term: 0.765)
-- Trajectory ADE: 25.1 px (traj term: 0.505)
+## Current Best Scores (composite 0.6239)
+- Intent BCE: 0.1867 (intent term: 0.751)
+- Trajectory ADE: 24.8 px (traj term: 0.497)
 
 ## Score Progression
 | Phase | Composite | BCE    | ADE   | What Changed |
@@ -22,10 +22,12 @@ Lower is better. 1.0 = zero-work baseline (class prior + zero velocity).
 | 9     | 0.6388    | 0.1911 | 25.4  | CatBoost intent via Optuna |
 | 10    | 0.6387    | 0.1917 | 25.3  | Ego-motion compensation + retune |
 | 11    | 0.6350    | 0.1903 | 25.1  | Intent ensemble + deeper XGB blend |
+| 15    | 0.6239    | 0.1867 | 24.8  | Combined data + cumsum + mixup + retune |
 
 ## Data
-- **Train**: 70,737 windows (stride=2 re-slicing of JAAD+PIE), **Dev**: 6,065
-- **Positive rate**: train=7.9%, dev=9.1% (heavily imbalanced)
+- **Train**: 70,737 windows (stride=2 re-slicing of JAAD+PIE), **Dev**: 6,065, **Eval**: 16,947 (has full labels)
+- **Train+Eval combined**: 87,684 windows (use data/train_full.parquet)
+- **Positive rate**: train=7.9%, dev=9.1%, eval=6.8% (heavily imbalanced)
 - **Two distinct sources**:
   - PIE (93.6%): ego_available=True, 6.4% positive, no metadata
   - JAAD (6.4%): ego_available=False, 48.2% positive, has time_of_day/weather/location
@@ -73,12 +75,13 @@ Indices to transform on horizontal flip:
 ## Training Hyperparameters
 - **GRU**: AdamW lr=8e-4 (cosine decay from 5-epoch warmup), batch=512, epochs=80, patience=15
 - **Loss**: Huber(delta=15) in pixel space, horizon weights [1.0, 1.0, 1.5, 2.0] + BCE * 50.0
-- **Augmentation**: Horizontal flip 50%, speed perturbation 30% (0.85-1.15x)
+- **Augmentation**: Horizontal flip 50%, speed perturbation 30% (0.85-1.15x), mixup 30% (Beta 0.4,0.4)
+- **Parameterization**: Velocity cumsum (predict increments, integrate via cumsum)
 
 ## Baselines (dev set)
 - Zero-velocity ADE: 62.5 px
 - Constant-velocity ADE: 39.5 px (mean of last 4 velocities × steps_ahead)
-- Current best ADE: 25.4 px
+- Current best ADE: 24.8 px
 
 ## Target Statistics (training set)
 - H1 (500ms): mean displacement 22.7 px
@@ -98,6 +101,11 @@ Indices to transform on horizontal flip:
 7. Gaussian NLL loss (exploited by model, BCE exploded)
 8. 5-seed ensemble (no gain over 3 after XGBoost blending)
 9. XGBoost meta-learner with GRU predictions as features (ADE 25.7 vs blend 25.0 — GRU overfit on train leaks through)
+10. hidden_dim=192 (overfitting, worse ADE)
+11. Loss rebalancing [0.5, 1.0, 2.0, 4.0] + Huber delta 30 (ADE 26.9 vs 26.3 — worse)
+12. Bbox size change features dw/dh (redundant — GRU learns diffs from w/h implicitly)
+13. INTENT_WEIGHT=20 (no change in ADE)
+14. Transformer encoder replacing BiGRU (ADE 27.4 vs 26.3 — worse for 16-step sequences)
 
 ## Ego-Motion Compensation
 Ego-induced bbox displacement estimated per frame:

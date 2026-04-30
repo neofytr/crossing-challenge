@@ -38,6 +38,7 @@ class CrossingModel(nn.Module):
 
     def forward(self, x):
         last = self.encode(x)
-        traj = self.traj_head(last).view(-1, 4, 2)
+        vel = self.traj_head(last).view(-1, 4, 2)
+        traj = torch.cumsum(vel, dim=1)
         intent = self.intent_head(last).squeeze(-1)
         return traj, intent
