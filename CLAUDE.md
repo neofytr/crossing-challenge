@@ -9,9 +9,9 @@ composite = 0.5 * (BCE / 0.2488) + 0.5 * (mean_ADE / 49.80)
 ```
 Lower is better. 1.0 = zero-work baseline (class prior + zero velocity).
 
-## Current Best Scores (composite 0.6388)
-- Intent BCE: 0.1911 (intent term: 0.768)
-- Trajectory ADE: 25.4 px (traj term: 0.510)
+## Current Best Scores (composite 0.6387)
+- Intent BCE: 0.1917 (intent term: 0.770)
+- Trajectory ADE: 25.3 px (traj term: 0.507)
 
 ## Score Progression
 | Phase | Composite | BCE    | ADE   | What Changed |
@@ -20,7 +20,7 @@ Lower is better. 1.0 = zero-work baseline (class prior + zero velocity).
 | 4     | 0.7123    | 0.2129 | 27.3  | BiGRU trajectory model |
 | 8     | 0.6507    | 0.1970 | 25.4  | XGBoost trajectory blending |
 | 9     | 0.6388    | 0.1911 | 25.4  | CatBoost intent via Optuna |
-| 10    | pending   |        |       | Ego-motion compensation (clamping fix) |
+| 10    | 0.6387    | 0.1917 | 25.3  | Ego-motion compensation + retune |
 
 ## Data
 - **Train**: 70,737 windows (stride=2 re-slicing of JAAD+PIE), **Dev**: 6,065
