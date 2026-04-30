@@ -187,6 +187,39 @@ def _engineered_features(req: dict) -> np.ndarray:
         stationary_frames,
         vx_sign_changes,
     ])
+
+    f_est = fw * 0.7
+    dt_frame = 1.0 / 15.0
+    ego_y_c = np.clip(ego_y, -0.5, 0.5)
+    ego_s_c = np.clip(ego_s, 0.0, 15.0)
+    ego_dx_arr = np.zeros(15, dtype=np.float64)
+    ego_dy_arr = np.zeros(15, dtype=np.float64)
+    for t in range(15):
+        t_idx = t + 1
+        depth_t = f_est * 1.7 / max(h[t_idx], 10.0)
+        ego_dx_arr[t] = f_est * ego_y_c[t_idx] * dt_frame
+        cx_rel = cx[t_idx] - fw / 2.0
+        cy_rel = cy[t_idx] - fh / 2.0
+        ego_dx_arr[t] += cx_rel * ego_s_c[t_idx] * dt_frame / depth_t
+        ego_dy_arr[t] += cy_rel * ego_s_c[t_idx] * dt_frame / depth_t
+    ego_dx_arr = np.clip(ego_dx_arr, -50.0, 50.0)
+    ego_dy_arr = np.clip(ego_dy_arr, -50.0, 50.0)
+
+    vx_comp = vx - ego_dx_arr
+    vy_comp = vy - ego_dy_arr
+
+    vx_comp_recent = vx_comp[-4:].mean() / fw
+    vy_comp_recent = vy_comp[-4:].mean() / fh
+    vx_comp_heading = np.arctan2(vy_comp[-4:].mean(), vx_comp[-4:].mean()) / np.pi
+    lateral_comp = abs(vx_comp[-4:].mean()) / fw
+
+    feats.extend([
+        vx_comp_recent,
+        vy_comp_recent,
+        min(abs(vx_comp_recent) / (abs(vy_comp_recent) + 1e-6), 10.0),
+        vx_comp_heading,
+        lateral_comp,
+    ])
     return np.asarray(feats, dtype=np.float32)
 
 
@@ -212,21 +245,48 @@ def _build_gru_input(req: dict) -> torch.Tensor:
     ego_speed = np.asarray(req["ego_speed_history"], dtype=np.float64)
     ego_yaw = np.asarray(req["ego_yaw_history"], dtype=np.float64)
 
+    f_est = fw * 0.7
+    dt = 1.0 / 15.0
+    ego_yaw_c = np.clip(ego_yaw, -0.5, 0.5)
+    ego_speed_c = np.clip(ego_speed, 0.0, 15.0)
+    ego_dx = np.zeros(16, dtype=np.float64)
+    ego_dy = np.zeros(16, dtype=np.float64)
+    for t in range(16):
+        depth_t = f_est * 1.7 / max(h[t], 10.0)
+        ego_dx[t] = f_est * ego_yaw_c[t] * dt
+        cx_rel = cx[t] - fw / 2.0
+        cy_rel = cy[t] - fh / 2.0
+        ego_dx[t] += cx_rel * ego_speed_c[t] * dt / depth_t
+        ego_dy[t] += cy_rel * ego_speed_c[t] * dt / depth_t
+    ego_dx = np.clip(ego_dx, -50.0, 50.0)
+    ego_dy = np.clip(ego_dy, -50.0, 50.0)
+
+    dx_comp = dx - ego_dx
+    dy_comp = dy - ego_dy
+    ax_comp = np.zeros(16, dtype=np.float64)
+    ay_comp = np.zeros(16, dtype=np.float64)
+    ax_comp[2:] = np.diff(dx_comp[1:])
+    ay_comp[2:] = np.diff(dy_comp[1:])
+
     seq = np.stack([
         cx / fw,
         cy / fh,
         w / fw,
         h / fh,
-        dx / fw,
-        dy / fh,
+        dx_comp / fw,
+        dy_comp / fh,
         np.clip(ego_speed, 0.0, 20.0) / 20.0,
         np.clip(ego_yaw, -10.0, 10.0) / 10.0,
-        ax / fw,
-        ay / fh,
+        ax_comp / fw,
+        ay_comp / fh,
+        dx / fw,
+        dy / fh,
+        ego_dx / fw,
+        ego_dy / fh,
     ], axis=-1)
 
     seq = np.nan_to_num(seq, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
-    return torch.from_numpy(seq).unsqueeze(0)  # [1, 16, 10]
+    return torch.from_numpy(seq).unsqueeze(0)  # [1, 16, 14]
 
 
 def predict(request: dict) -> dict:
@@ -259,6 +319,8 @@ def predict(request: dict) -> dict:
     input_flip[0, :, 4] = -input_flip[0, :, 4]
     input_flip[0, :, 7] = -input_flip[0, :, 7]
     input_flip[0, :, 8] = -input_flip[0, :, 8]
+    input_flip[0, :, 10] = -input_flip[0, :, 10]
+    input_flip[0, :, 12] = -input_flip[0, :, 12]
 
     all_traj_preds = []
     for model in models:

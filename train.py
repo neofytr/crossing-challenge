@@ -24,7 +24,7 @@ BASE_LR = 8e-4
 MIN_LR = 1e-5
 INTENT_WEIGHT = 50.0
 
-MODEL_CFG = {"input_dim": 10, "hidden_dim": 128, "num_layers": 2, "dropout": 0.2, "num_heads": 4}
+MODEL_CFG = {"input_dim": 14, "hidden_dim": 128, "num_layers": 2, "dropout": 0.2}
 
 
 def compute_loss(pred_traj, true_traj, pred_intent, true_intent, frame_wh):
