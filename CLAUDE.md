@@ -9,9 +9,9 @@ composite = 0.5 * (BCE / 0.2488) + 0.5 * (mean_ADE / 49.80)
 ```
 Lower is better. 1.0 = zero-work baseline (class prior + zero velocity).
 
-## Current Best Scores (composite 0.6387)
-- Intent BCE: 0.1917 (intent term: 0.770)
-- Trajectory ADE: 25.3 px (traj term: 0.507)
+## Current Best Scores (composite 0.6350)
+- Intent BCE: 0.1903 (intent term: 0.765)
+- Trajectory ADE: 25.1 px (traj term: 0.505)
 
 ## Score Progression
 | Phase | Composite | BCE    | ADE   | What Changed |
@@ -21,6 +21,7 @@ Lower is better. 1.0 = zero-work baseline (class prior + zero velocity).
 | 8     | 0.6507    | 0.1970 | 25.4  | XGBoost trajectory blending |
 | 9     | 0.6388    | 0.1911 | 25.4  | CatBoost intent via Optuna |
 | 10    | 0.6387    | 0.1917 | 25.3  | Ego-motion compensation + retune |
+| 11    | 0.6350    | 0.1903 | 25.1  | Intent ensemble + deeper XGB blend |
 
 ## Data
 - **Train**: 70,737 windows (stride=2 re-slicing of JAAD+PIE), **Dev**: 6,065
@@ -96,6 +97,7 @@ Indices to transform on horizontal flip:
 6. Cross-attention trajectory decoder with horizon queries (ADE worse)
 7. Gaussian NLL loss (exploited by model, BCE exploded)
 8. 5-seed ensemble (no gain over 3 after XGBoost blending)
+9. XGBoost meta-learner with GRU predictions as features (ADE 25.7 vs blend 25.0 — GRU overfit on train leaks through)
 
 ## Ego-Motion Compensation
 Ego-induced bbox displacement estimated per frame:

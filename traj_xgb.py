@@ -71,7 +71,8 @@ def build_traj_features(df):
 
 def get_gru_predictions(df, models):
     n = len(df)
-    all_preds = np.zeros((n, 4, 2), dtype=np.float64)
+    num_seeds = len(models)
+    per_seed_preds = np.zeros((num_seeds, n, 4, 2), dtype=np.float64)
     batch_size = 512
     for start in range(0, n, batch_size):
         end = min(start + batch_size, n)
@@ -92,23 +93,29 @@ def get_gru_predictions(df, models):
         batch_flip[:, :, 10] = -batch_flip[:, :, 10]
         batch_flip[:, :, 12] = -batch_flip[:, :, 12]
 
-        traj_preds = []
-        for model in models:
+        for s, model in enumerate(models):
             with torch.no_grad():
                 t_orig, _ = model(batch_orig)
-                traj_preds.append(t_orig)
                 t_flip, _ = model(batch_flip)
                 t_flip[:, :, 0] = -t_flip[:, :, 0]
-                traj_preds.append(t_flip)
-
-        traj_avg = torch.stack(traj_preds).mean(dim=0).numpy()
-        for j in range(end - start):
-            all_preds[start + j, :, 0] = traj_avg[j, :, 0] * fws[j]
-            all_preds[start + j, :, 1] = traj_avg[j, :, 1] * fhs[j]
+            seed_avg = ((t_orig + t_flip) / 2.0).numpy()
+            for j in range(end - start):
+                per_seed_preds[s, start + j, :, 0] = seed_avg[j, :, 0] * fws[j]
+                per_seed_preds[s, start + j, :, 1] = seed_avg[j, :, 1] * fhs[j]
 
         if (start // batch_size) % 20 == 0:
             print(f"  {start}/{n}")
-    return all_preds
+
+    all_preds = per_seed_preds.mean(axis=0)
+    return all_preds, per_seed_preds
+
+
+def build_meta_features(X_hand, gru_preds, gru_per_seed):
+    n = X_hand.shape[0]
+    gru_flat = gru_preds.reshape(n, -1).astype(np.float32)
+    gru_std = gru_per_seed.std(axis=0).reshape(n, -1).astype(np.float32)
+    gru_mag = np.sqrt(gru_preds[:, :, 0]**2 + gru_preds[:, :, 1]**2).astype(np.float32)
+    return np.concatenate([X_hand, gru_flat, gru_std, gru_mag], axis=1)
 
 
 def main():
@@ -120,7 +127,7 @@ def main():
     t0 = time.time()
     X_train, y_train = build_traj_features(train)
     X_dev, y_dev = build_traj_features(dev)
-    print(f"  {time.time()-t0:.1f}s  shape: {X_train.shape}")
+    print(f"  {time.time()-t0:.1f}s  hand-crafted shape: {X_train.shape}")
 
     print("Loading GRU models...")
     with open("model_config.json") as f:
@@ -132,10 +139,10 @@ def main():
         model.eval()
         models.append(model)
 
-    print("Getting GRU predictions...")
+    print("Getting GRU predictions (per-seed)...")
     t0 = time.time()
-    gru_preds_train = get_gru_predictions(train, models)
-    gru_preds_dev = get_gru_predictions(dev, models)
+    gru_preds_train, gru_per_seed_train = get_gru_predictions(train, models)
+    gru_preds_dev, gru_per_seed_dev = get_gru_predictions(dev, models)
     print(f"  {time.time()-t0:.1f}s")
 
     gru_ade_per_h = []
@@ -146,28 +153,29 @@ def main():
     gru_mean_ade = np.mean(gru_ade_per_h)
     print(f"\nGRU-only ADE: {gru_mean_ade:.1f}px  [{' '.join(f'H{i+1}:{a:.1f}' for i,a in enumerate(gru_ade_per_h))}]")
 
-    print("\nTraining 8 XGBoost regressors...")
-    xgb_models = {}
+    # === Approach 1: XGBoost on hand-crafted features + blend ===
+    print("\n--- Approach 1: XGBoost blend (hand-crafted features) ---")
+    print("Training 8 XGBoost regressors...")
+    xgb_models_blend = {}
     xgb_preds_dev = np.zeros_like(y_dev)
     for h in range(4):
         for c, coord_name in enumerate(["dx", "dy"]):
             key = f"h{h}_{coord_name}"
-            print(f"  Training {key}...")
             reg = XGBRegressor(
-                n_estimators=1000,
-                max_depth=6,
-                learning_rate=0.03,
-                subsample=0.8,
-                colsample_bytree=0.7,
-                min_child_weight=10,
+                n_estimators=2000,
+                max_depth=7,
+                learning_rate=0.02,
+                subsample=0.85,
+                colsample_bytree=0.75,
+                min_child_weight=5,
                 tree_method="hist",
                 n_jobs=-1,
                 eval_metric="mae",
-                early_stopping_rounds=30,
+                early_stopping_rounds=50,
             )
             reg.fit(X_train, y_train[:, h, c],
                     eval_set=[(X_dev, y_dev[:, h, c])], verbose=False)
-            xgb_models[key] = reg
+            xgb_models_blend[key] = reg
             xgb_preds_dev[:, h, c] = reg.predict(X_dev)
 
     xgb_ade_per_h = []
@@ -176,9 +184,9 @@ def main():
                         (xgb_preds_dev[:, h, 1] - y_dev[:, h, 1])**2).mean()
         xgb_ade_per_h.append(ade_h)
     xgb_mean_ade = np.mean(xgb_ade_per_h)
-    print(f"\nXGB-only ADE: {xgb_mean_ade:.1f}px  [{' '.join(f'H{i+1}:{a:.1f}' for i,a in enumerate(xgb_ade_per_h))}]")
+    print(f"XGB-only ADE: {xgb_mean_ade:.1f}px  [{' '.join(f'H{i+1}:{a:.1f}' for i,a in enumerate(xgb_ade_per_h))}]")
 
-    print("\nFinding optimal blend weights per horizon...")
+    print("Finding optimal blend weights per horizon...")
     best_weights = []
     for h in range(4):
         best_ade = float("inf")
@@ -191,7 +199,7 @@ def main():
                 best_ade = ade
                 best_w = w
         best_weights.append(best_w)
-        print(f"  H{h+1}: xgb_weight={best_w:.2f}, blended={best_ade:.1f}px (GRU={gru_ade_per_h[h]:.1f}, XGB={xgb_ade_per_h[h]:.1f})")
+        print(f"  H{h+1}: xgb_weight={best_w:.2f}, blended={best_ade:.1f}px")
 
     blended_ade_per_h = []
     for h in range(4):
@@ -200,19 +208,64 @@ def main():
                         (blended[:, 1] - y_dev[:, h, 1])**2).mean()
         blended_ade_per_h.append(ade_h)
     blended_mean_ade = np.mean(blended_ade_per_h)
+    print(f"Blended ADE: {blended_mean_ade:.1f}px")
 
-    print(f"\n  GRU-only mean ADE:    {gru_mean_ade:.1f}px")
-    print(f"  XGB-only mean ADE:    {xgb_mean_ade:.1f}px")
-    print(f"  BLENDED mean ADE:     {blended_mean_ade:.1f}px")
-    print(f"  Improvement over GRU: {gru_mean_ade - blended_mean_ade:.1f}px")
+    # === Approach 2: Meta-learner (hand-crafted + GRU features) ===
+    print("\n--- Approach 2: XGBoost meta-learner (hand-crafted + GRU features) ---")
+    X_meta_train = build_meta_features(X_train, gru_preds_train, gru_per_seed_train)
+    X_meta_dev = build_meta_features(X_dev, gru_preds_dev, gru_per_seed_dev)
+    print(f"Meta-feature shape: {X_meta_train.shape}")
 
-    if blended_mean_ade < gru_mean_ade:
-        print("\nBlending helps! Saving XGBoost trajectory models...")
+    print("Training 8 XGBoost meta-learner regressors...")
+    xgb_models_meta = {}
+    meta_preds_dev = np.zeros_like(y_dev)
+    for h in range(4):
+        for c, coord_name in enumerate(["dx", "dy"]):
+            key = f"h{h}_{coord_name}"
+            reg = XGBRegressor(
+                n_estimators=2000,
+                max_depth=7,
+                learning_rate=0.02,
+                subsample=0.85,
+                colsample_bytree=0.75,
+                min_child_weight=5,
+                tree_method="hist",
+                n_jobs=-1,
+                eval_metric="mae",
+                early_stopping_rounds=50,
+            )
+            reg.fit(X_meta_train, y_train[:, h, c],
+                    eval_set=[(X_meta_dev, y_dev[:, h, c])], verbose=False)
+            xgb_models_meta[key] = reg
+            meta_preds_dev[:, h, c] = reg.predict(X_meta_dev)
+
+    meta_ade_per_h = []
+    for h in range(4):
+        ade_h = np.sqrt((meta_preds_dev[:, h, 0] - y_dev[:, h, 0])**2 +
+                        (meta_preds_dev[:, h, 1] - y_dev[:, h, 1])**2).mean()
+        meta_ade_per_h.append(ade_h)
+    meta_mean_ade = np.mean(meta_ade_per_h)
+    print(f"Meta-learner ADE: {meta_mean_ade:.1f}px  [{' '.join(f'H{i+1}:{a:.1f}' for i,a in enumerate(meta_ade_per_h))}]")
+
+    # === Summary and save best ===
+    print(f"\n{'='*50}")
+    print(f"  GRU-only mean ADE:      {gru_mean_ade:.1f}px")
+    print(f"  XGB-only mean ADE:      {xgb_mean_ade:.1f}px")
+    print(f"  Blended mean ADE:       {blended_mean_ade:.1f}px")
+    print(f"  Meta-learner mean ADE:  {meta_mean_ade:.1f}px")
+
+    if meta_mean_ade < blended_mean_ade:
+        print(f"\nMeta-learner wins! ({meta_mean_ade:.1f} vs {blended_mean_ade:.1f})")
         with open("traj_xgb.pkl", "wb") as f:
-            pickle.dump({"models": xgb_models, "blend_weights": best_weights}, f)
-        print("Saved traj_xgb.pkl")
+            pickle.dump({"models": xgb_models_meta, "meta_learner": True}, f)
+        print("Saved traj_xgb.pkl (meta_learner mode)")
+    elif blended_mean_ade < gru_mean_ade:
+        print(f"\nBlend wins! ({blended_mean_ade:.1f} vs meta {meta_mean_ade:.1f})")
+        with open("traj_xgb.pkl", "wb") as f:
+            pickle.dump({"models": xgb_models_blend, "blend_weights": best_weights}, f)
+        print("Saved traj_xgb.pkl (blend mode)")
     else:
-        print("\nBlending did NOT help. XGBoost trajectory not useful.")
+        print("\nNeither approach helps over GRU-only. Not saving.")
 
 
 if __name__ == "__main__":

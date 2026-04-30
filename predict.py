@@ -322,18 +322,22 @@ def predict(request: dict) -> dict:
     input_flip[0, :, 10] = -input_flip[0, :, 10]
     input_flip[0, :, 12] = -input_flip[0, :, 12]
 
-    all_traj_preds = []
+    per_seed_traj = []
+    all_intent_preds = []
     for model in models:
         with torch.no_grad():
-            traj_orig, _ = model(input_orig)
-            all_traj_preds.append(traj_orig)
-
-            traj_flip, _ = model(input_flip)
+            traj_orig, intent_orig = model(input_orig)
+            traj_flip, intent_flip = model(input_flip)
             traj_flip[:, :, 0] = -traj_flip[:, :, 0]
-            all_traj_preds.append(traj_flip)
+        per_seed_traj.append((traj_orig + traj_flip) / 2.0)
+        all_intent_preds.append(intent_orig.item())
+        all_intent_preds.append(intent_flip.item())
 
-    traj_avg = torch.stack(all_traj_preds).mean(dim=0)
+    traj_avg = torch.stack(per_seed_traj).mean(dim=0)
     traj_delta = traj_avg.squeeze(0).numpy()
+
+    gru_intent_prob = float(np.mean(all_intent_preds))
+    intent_prob = 0.80 * intent_prob + 0.20 * gru_intent_prob
 
     hist = _as_2d(request["bbox_history"])
     cur_cx = (hist[-1, 0] + hist[-1, 2]) * 0.5
@@ -344,7 +348,27 @@ def predict(request: dict) -> dict:
     fh = float(request["frame_h"])
 
     traj_xgb_data = _load_traj_xgb()
-    if traj_xgb_data is not None:
+    if traj_xgb_data is not None and traj_xgb_data.get("meta_learner"):
+        traj_feats = _traj_xgb_features(request)
+        if not np.isfinite(traj_feats).all():
+            traj_feats = np.nan_to_num(traj_feats, nan=0.0, posinf=0.0, neginf=0.0)
+        per_seed_px = np.zeros((len(models), 4, 2))
+        for s, st in enumerate(per_seed_traj):
+            st_np = st.squeeze(0).numpy()
+            per_seed_px[s, :, 0] = st_np[:, 0] * fw
+            per_seed_px[s, :, 1] = st_np[:, 1] * fh
+        gru_avg_px = per_seed_px.mean(axis=0)
+        gru_flat = gru_avg_px.reshape(1, -1)
+        gru_std = per_seed_px.std(axis=0).reshape(1, -1)
+        gru_mag = np.sqrt(gru_avg_px[:, 0]**2 + gru_avg_px[:, 1]**2).reshape(1, -1)
+        meta_feats = np.concatenate([traj_feats, gru_flat, gru_std, gru_mag], axis=1)
+        if not np.isfinite(meta_feats).all():
+            meta_feats = np.nan_to_num(meta_feats, nan=0.0, posinf=0.0, neginf=0.0)
+        xgb_models = traj_xgb_data["models"]
+        for h in range(4):
+            traj_delta[h, 0] = float(xgb_models[f"h{h}_dx"].predict(meta_feats)[0]) / fw
+            traj_delta[h, 1] = float(xgb_models[f"h{h}_dy"].predict(meta_feats)[0]) / fh
+    elif traj_xgb_data is not None:
         traj_feats = _traj_xgb_features(request)
         if not np.isfinite(traj_feats).all():
             traj_feats = np.nan_to_num(traj_feats, nan=0.0, posinf=0.0, neginf=0.0)
