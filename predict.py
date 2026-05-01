@@ -9,15 +9,16 @@ import numpy as np
 
 warnings.filterwarnings("ignore", message="X does not have valid feature names")
 
-MODEL_PATH = Path(__file__).parent / "model.pkl"
-GRU_CONFIG = Path(__file__).parent / "model_config.json"
-TRAJ_XGB_PATH = Path(__file__).parent / "traj_xgb.pkl"
+_MODELS = Path(__file__).parent / "models"
+MODEL_PATH = _MODELS / "model.pkl"
+GRU_CONFIG = _MODELS / "model_config.json"
+TRAJ_XGB_PATH = _MODELS / "traj_xgb.pkl"
 HORIZON_KEYS = ["bbox_500ms", "bbox_1000ms", "bbox_1500ms", "bbox_2000ms"]
 MODEL_SEEDS = [42, 123, 456]
 
 # Use ONNX Runtime for inference if .onnx files are present (CPU-lean, <2 GB Docker image).
 # Falls back to PyTorch when .onnx files are absent (dev / training environment).
-_ONNX_DIR = Path(__file__).parent
+_ONNX_DIR = _MODELS
 _USE_ONNX = (_ONNX_DIR / "model_s42.onnx").exists()
 
 if _USE_ONNX:
@@ -67,7 +68,7 @@ def _load_gru_models():
     models = []
     for seed in MODEL_SEEDS:
         model = CrossingModel(**cfg)
-        path = Path(__file__).parent / f"best_model_s{seed}.pt"
+        path = _MODELS / f"best_model_s{seed}.pt"
         model.load_state_dict(torch.load(path, map_location="cpu", weights_only=True))
         model.eval()
         models.append(model)

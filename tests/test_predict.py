@@ -39,7 +39,7 @@ def _synthetic_request(**over) -> dict:
 
 
 def test_model_pkl_exists():
-    assert (HERE / "model.pkl").exists(), "Run `python baseline.py` before testing."
+    assert (HERE / "models" / "model.pkl").exists(), "Run `python training/baseline.py` before testing."
 
 
 def test_predict_returns_required_keys():

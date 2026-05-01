@@ -13,9 +13,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 ENV OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 ORT_NUM_THREADS=4
 
 COPY predict.py grade.py trajectory_model.py ./
-COPY model.pkl model_config.json traj_xgb.pkl ./
-COPY best_model_s42.pt best_model_s123.pt best_model_s456.pt ./
-COPY model_s42.onnx model_s123.onnx model_s456.onnx ./
-COPY model_s42.onnx.data model_s123.onnx.data model_s456.onnx.data ./
+COPY models/ ./models/
 
 ENTRYPOINT ["python", "grade.py"]
