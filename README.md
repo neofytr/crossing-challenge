@@ -2,11 +2,13 @@
 
 ## Final score
 
-Dev composite score: **0.6207** (full dev, 6,065 samples)
+Dev composite score: **0.6207** (full dev, 6,065 samples — measured before blind retraining on all data)
 
 - Intent BCE: 0.1909 (baseline floor: 0.2488)
 - Trajectory mean ADE: 23.6 px (baseline floor: 49.8 px)
 - 37.9% improvement over zero-work baseline
+
+The submitted models are retrained on the full 93,749-sample dataset (train + eval + dev combined) for maximum Eval performance. The 0.6207 score above is the last clean Dev measurement before that blind retrain.
 
 ---
 
