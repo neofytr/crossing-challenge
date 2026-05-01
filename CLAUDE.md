@@ -9,9 +9,10 @@ composite = 0.5 * (BCE / 0.2488) + 0.5 * (mean_ADE / 49.80)
 ```
 Lower is better. 1.0 = zero-work baseline (class prior + zero velocity).
 
-## Current Best Scores (composite 0.6239)
-- Intent BCE: 0.1867 (intent term: 0.751)
-- Trajectory ADE: 24.8 px (traj term: 0.497)
+## Current Best Scores (full dev, 6065 samples)
+- Composite: 0.6323
+- Intent BCE: 0.1921
+- Trajectory ADE: 24.5 px
 
 ## Score Progression
 | Phase | Composite | BCE    | ADE   | What Changed |
@@ -22,7 +23,7 @@ Lower is better. 1.0 = zero-work baseline (class prior + zero velocity).
 | 9     | 0.6388    | 0.1911 | 25.4  | CatBoost intent via Optuna |
 | 10    | 0.6387    | 0.1917 | 25.3  | Ego-motion compensation + retune |
 | 11    | 0.6350    | 0.1903 | 25.1  | Intent ensemble + deeper XGB blend |
-| 15    | 0.6239    | 0.1867 | 24.8  | Combined data + cumsum + mixup + retune |
+| 15    | 0.6323    | 0.1921 | 24.5  | Combined data + cumsum + mixup + intent-conditioned XGB |
 
 ## Data
 - **Train**: 70,737 windows (stride=2 re-slicing of JAAD+PIE), **Dev**: 6,065, **Eval**: 16,947 (has full labels)
@@ -81,7 +82,7 @@ Indices to transform on horizontal flip:
 ## Baselines (dev set)
 - Zero-velocity ADE: 62.5 px
 - Constant-velocity ADE: 39.5 px (mean of last 4 velocities × steps_ahead)
-- Current best ADE: 24.8 px
+- Current best ADE: 24.5 px
 
 ## Target Statistics (training set)
 - H1 (500ms): mean displacement 22.7 px
@@ -106,6 +107,18 @@ Indices to transform on horizontal flip:
 12. Bbox size change features dw/dh (redundant — GRU learns diffs from w/h implicitly)
 13. INTENT_WEIGHT=20 (no change in ADE)
 14. Transformer encoder replacing BiGRU (ADE 27.4 vs 26.3 — worse for 16-step sequences)
+15. Camera calibration fix (f_est 1344→1004.8 from PIE intrinsics) — GRU had already adapted to approximate focal length
+16. Finer XGBoost blend weight search (0.01 step) — marginal refinement
+17. GRU fine-tuning with 3x crossing weight — no ADE improvement, model already well-optimized
+
+## Hints from Problem Statement — Status
+- "any pretrained model" — not used; all models trained from scratch
+- "additional public datasets" — JAAD+PIE used for stride-2 re-slicing (87k windows)
+- PedestrianActionBenchmark (WACV '21) — techniques informed feature engineering
+- ENCORE/PedFormer outputs — can't use (hashed IDs, different splits/temporal resolution)
+- PIE camera calibration — tried fx=1004.8; GRU adapted to f_est=0.7*fw, no improvement
+- Intent-conditioned trajectory — DONE: intent_prob as 61st XGB feature
+- train_all.parquet — available for blind final training (93,749 = train+eval+dev)
 
 ## Ego-Motion Compensation
 Ego-induced bbox displacement estimated per frame:

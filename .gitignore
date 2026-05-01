@@ -13,3 +13,14 @@ data/eval.parquet
 # Hashing salt — used by data/build_windows.py; never ship
 .hash_salt
 catboost_info/
+
+# Generated training artifacts
+data/train_full.parquet
+data/train_all.parquet
+data/train_original.parquet
+data/dev_original.parquet
+traj_xgb_backup.pkl
+traj_xgb_60feat.pkl
+traj_xgb_dev.pkl
+model_dev.pkl
+best_model_ft_*.pt

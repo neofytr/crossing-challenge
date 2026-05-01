@@ -362,9 +362,12 @@ def predict(request: dict) -> dict:
         gru_std = per_seed_px.std(axis=0).reshape(1, -1)
         gru_mag = np.sqrt(gru_avg_px[:, 0]**2 + gru_avg_px[:, 1]**2).reshape(1, -1)
         meta_feats = np.concatenate([traj_feats, gru_flat, gru_std, gru_mag], axis=1)
+        xgb_models = traj_xgb_data["models"]
+        expected_n = xgb_models["h0_dx"].n_features_in_
+        if meta_feats.shape[1] < expected_n:
+            meta_feats = np.concatenate([meta_feats, [[intent_prob]]], axis=1)
         if not np.isfinite(meta_feats).all():
             meta_feats = np.nan_to_num(meta_feats, nan=0.0, posinf=0.0, neginf=0.0)
-        xgb_models = traj_xgb_data["models"]
         for h in range(4):
             traj_delta[h, 0] = float(xgb_models[f"h{h}_dx"].predict(meta_feats)[0]) / fw
             traj_delta[h, 1] = float(xgb_models[f"h{h}_dy"].predict(meta_feats)[0]) / fh
@@ -373,6 +376,9 @@ def predict(request: dict) -> dict:
         if not np.isfinite(traj_feats).all():
             traj_feats = np.nan_to_num(traj_feats, nan=0.0, posinf=0.0, neginf=0.0)
         xgb_models = traj_xgb_data["models"]
+        expected_n = xgb_models["h0_dx"].n_features_in_
+        if traj_feats.shape[1] < expected_n:
+            traj_feats = np.concatenate([traj_feats, [[intent_prob]]], axis=1)
         blend_w = traj_xgb_data["blend_weights"]
         for h in range(4):
             xgb_dx = float(xgb_models[f"h{h}_dx"].predict(traj_feats)[0])

@@ -13,6 +13,10 @@ from xgboost import XGBRegressor
 from predict import _engineered_features, _build_gru_input
 from trajectory_model import CrossingModel
 
+with open("model.pkl", "rb") as f:
+    _intent_data = pickle.load(f)
+_intent_model = _intent_data["intent"] if isinstance(_intent_data, dict) else _intent_data
+
 DATA = Path(__file__).parent / "data"
 MODEL_SEEDS = [42, 123, 456]
 HORIZON_KEYS = ["bbox_500ms", "bbox_1000ms", "bbox_1500ms", "bbox_2000ms"]
@@ -56,7 +60,8 @@ def build_traj_features(df):
             float(cy[-1] - cy[-8]) / fh if len(cy) >= 8 else 0.0,
         ], dtype=np.float32)
 
-        feats_list.append(np.concatenate([hand, extra]))
+        intent_prob = _intent_model.predict_proba(hand.reshape(1, -1))[0, 1]
+        feats_list.append(np.concatenate([hand, extra, [intent_prob]]))
 
         cur_cx, cur_cy = cx[-1], cy[-1]
         for h_idx, hk in enumerate(HORIZON_KEYS):
