@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import torch
 from catboost import CatBoostClassifier
+from lightgbm import LGBMClassifier
 from xgboost import XGBRegressor
 
 from predict import _engineered_features, _build_gru_input
@@ -55,7 +56,10 @@ def build_traj_features(df, intent_model):
         hist = np.stack([np.asarray(b, dtype=np.float64) for b in req["bbox_history"]])
         cx = (hist[:, 0] + hist[:, 2]) * 0.5
         cy = (hist[:, 1] + hist[:, 3]) * 0.5
+        h = hist[:, 3] - hist[:, 1]
         fw, fh = float(req["frame_w"]), float(req["frame_h"])
+        vx = np.diff(cx)
+        vy = np.diff(cy)
 
         t = np.arange(4)
         px = np.polyfit(t, cx[-4:], 1)
@@ -68,8 +72,20 @@ def build_traj_features(df, intent_model):
             float(cy[-1] - cy[-8]) / fh if len(cy) >= 8 else 0.0,
         ], dtype=np.float32)
 
+        ego_s = np.asarray(req["ego_speed_history"], dtype=np.float64)
+        depth_est = (fw * 0.7 * 1.7) / max(h[-1], 10.0)
+        depth_norm = min(depth_est / 100.0, 1.0)
+        ego_braking = (ego_s[-1] - ego_s[-4]) / max(ego_s.max(), 1e-6)
+        lat_accel = (abs(vx[-2:].mean()) - abs(vx[-6:-4].mean() if len(vx) >= 6 else vx[:2].mean())) / fw
+        vx_var = vx.var() / (fw * fw)
+        vy_var = vy.var() / (fh * fh)
+        heading_val = np.arctan2(vy[-4:].mean(), vx[-4:].mean())
+        pos_heading = (cx[-1] / fw) * heading_val / np.pi
+        extra2 = np.array([depth_norm, ego_braking, lat_accel, vx_var, vy_var, pos_heading],
+                          dtype=np.float32)
+
         intent_prob = intent_model.predict_proba(hand.reshape(1, -1))[0, 1]
-        feats_list.append(np.concatenate([hand, extra, [intent_prob]]))
+        feats_list.append(np.concatenate([hand, extra, extra2, [intent_prob]]))
 
         cur_cx, cur_cy = cx[-1], cy[-1]
         for h_idx, hk in enumerate(HORIZON_KEYS):
@@ -83,9 +99,10 @@ def build_traj_features(df, intent_model):
 
 
 def get_gru_predictions(df, models):
+    device = next(models[0].parameters()).device
     n = len(df)
     per_seed_preds = np.zeros((len(models), n, 4, 2), dtype=np.float64)
-    batch_size = 512
+    batch_size = 1024
     for start in range(0, n, batch_size):
         end = min(start + batch_size, n)
         inputs_orig = []
@@ -96,7 +113,7 @@ def get_gru_predictions(df, models):
             fws.append(float(req["frame_w"]))
             fhs.append(float(req["frame_h"]))
 
-        batch_orig = torch.cat(inputs_orig, dim=0)
+        batch_orig = torch.cat(inputs_orig, dim=0).to(device)
         batch_flip = batch_orig.clone()
         batch_flip[:, :, 0] = 1.0 - batch_flip[:, :, 0]
         batch_flip[:, :, 4] = -batch_flip[:, :, 4]
@@ -110,7 +127,7 @@ def get_gru_predictions(df, models):
                 t_orig, _ = model(batch_orig)
                 t_flip, _ = model(batch_flip)
                 t_flip[:, :, 0] = -t_flip[:, :, 0]
-            seed_avg = ((t_orig + t_flip) / 2.0).numpy()
+            seed_avg = ((t_orig + t_flip) / 2.0).cpu().numpy()
             for j in range(end - start):
                 per_seed_preds[s, start + j, :, 0] = seed_avg[j, :, 0] * fws[j]
                 per_seed_preds[s, start + j, :, 1] = seed_avg[j, :, 1] * fhs[j]
@@ -147,15 +164,32 @@ def main():
         "subsample": old_params.get("subsample", 0.6177),
         "bootstrap_type": old_params.get("bootstrap_type", "MVS"),
         "boosting_type": old_params.get("boosting_type", "Plain"),
+        "task_type": "GPU",
         "random_seed": 42,
         "verbose": 100,
     }
     clf = CatBoostClassifier(**cb_params)
     clf.fit(X_all, y_all)
 
-    with open("model.pkl", "wb") as f:
-        pickle.dump({"intent": clf}, f)
-    print("  Saved model.pkl (CatBoost retrained on all data)")
+    # Also retrain LightGBM if it was part of the ensemble
+    if "lgbm" in old:
+        print("\n=== Step 1b: Retrain LightGBM intent ===")
+        old_lgbm = old["lgbm"]
+        lgbm_params = old_lgbm.get_params()
+        lgbm_params.pop("early_stopping_rounds", None)
+        lgbm_params.pop("early_stopping_round", None)
+        n_lgbm = lgbm_params.get("n_estimators", 1000)
+        lgbm_params["n_estimators"] = n_lgbm
+        lgbm_clf = LGBMClassifier(**lgbm_params)
+        lgbm_clf.fit(X_all, y_all, verbose=-1)
+        lgbm_weight = old.get("lgbm_weight", 0.0)
+        with open("model.pkl", "wb") as f:
+            pickle.dump({"intent": clf, "lgbm": lgbm_clf, "lgbm_weight": lgbm_weight}, f)
+        print(f"  Saved model.pkl (CatBoost + LightGBM retrained on all data, lgbm_weight={lgbm_weight:.2f})")
+    else:
+        with open("model.pkl", "wb") as f:
+            pickle.dump({"intent": clf}, f)
+        print("  Saved model.pkl (CatBoost retrained on all data)")
 
     # --- Step 2: Retrain XGB trajectory ---
     print("\n=== Step 2: Build trajectory features ===")
@@ -165,10 +199,12 @@ def main():
     print("\n=== Step 3: Get GRU predictions ===")
     with open("model_config.json") as f:
         cfg = json.load(f)
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
     models = []
     for seed in MODEL_SEEDS:
         m = CrossingModel(**cfg)
-        m.load_state_dict(torch.load(f"best_model_s{seed}.pt", map_location="cpu", weights_only=True))
+        m.load_state_dict(torch.load(f"best_model_s{seed}.pt", map_location=DEVICE, weights_only=True))
+        m.to(DEVICE)
         m.eval()
         models.append(m)
 
@@ -186,6 +222,8 @@ def main():
             old_model = old_xgb["models"][key]
             params = old_model.get_params()
             params.pop("early_stopping_rounds", None)
+            params.pop("n_jobs", None)
+            params["device"] = "cuda"
             n_est = old_model.best_iteration + 1 if hasattr(old_model, "best_iteration") and old_model.best_iteration else params.get("n_estimators", 1000)
             params["n_estimators"] = n_est
             reg = XGBRegressor(**params)
@@ -193,6 +231,8 @@ def main():
             xgb_models[key] = reg
             print(f"  Trained {key} (n_est={n_est})")
 
+    for m in xgb_models.values():
+        m.set_params(device="cpu")
     with open("traj_xgb.pkl", "wb") as f:
         pickle.dump({"models": xgb_models, "blend_weights": old_weights}, f)
     print(f"\n  Saved traj_xgb.pkl (retrained on all data, {len(xgb_models)} models)")

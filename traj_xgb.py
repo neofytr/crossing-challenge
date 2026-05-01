@@ -45,6 +45,7 @@ def build_traj_features(df):
         hist = np.stack([np.asarray(b, dtype=np.float64) for b in req["bbox_history"]])
         cx = (hist[:, 0] + hist[:, 2]) * 0.5
         cy = (hist[:, 1] + hist[:, 3]) * 0.5
+        h = hist[:, 3] - hist[:, 1]
         fw, fh = float(req["frame_w"]), float(req["frame_h"])
         vx = np.diff(cx)
         vy = np.diff(cy)
@@ -60,8 +61,20 @@ def build_traj_features(df):
             float(cy[-1] - cy[-8]) / fh if len(cy) >= 8 else 0.0,
         ], dtype=np.float32)
 
+        ego_s = np.asarray(req["ego_speed_history"], dtype=np.float64)
+        depth_est = (fw * 0.7 * 1.7) / max(h[-1], 10.0)
+        depth_norm = min(depth_est / 100.0, 1.0)
+        ego_braking = (ego_s[-1] - ego_s[-4]) / max(ego_s.max(), 1e-6)
+        lat_accel = (abs(vx[-2:].mean()) - abs(vx[-6:-4].mean() if len(vx) >= 6 else vx[:2].mean())) / fw
+        vx_var = vx.var() / (fw * fw)
+        vy_var = vy.var() / (fh * fh)
+        heading_val = np.arctan2(vy[-4:].mean(), vx[-4:].mean())
+        pos_heading = (cx[-1] / fw) * heading_val / np.pi
+        extra2 = np.array([depth_norm, ego_braking, lat_accel, vx_var, vy_var, pos_heading],
+                          dtype=np.float32)
+
         intent_prob = _intent_model.predict_proba(hand.reshape(1, -1))[0, 1]
-        feats_list.append(np.concatenate([hand, extra, [intent_prob]]))
+        feats_list.append(np.concatenate([hand, extra, extra2, [intent_prob]]))
 
         cur_cx, cur_cy = cx[-1], cy[-1]
         for h_idx, hk in enumerate(HORIZON_KEYS):
@@ -75,10 +88,11 @@ def build_traj_features(df):
 
 
 def get_gru_predictions(df, models):
+    device = next(models[0].parameters()).device
     n = len(df)
     num_seeds = len(models)
     per_seed_preds = np.zeros((num_seeds, n, 4, 2), dtype=np.float64)
-    batch_size = 512
+    batch_size = 1024
     for start in range(0, n, batch_size):
         end = min(start + batch_size, n)
         inputs_orig = []
@@ -89,7 +103,7 @@ def get_gru_predictions(df, models):
             fws.append(float(req["frame_w"]))
             fhs.append(float(req["frame_h"]))
 
-        batch_orig = torch.cat(inputs_orig, dim=0)
+        batch_orig = torch.cat(inputs_orig, dim=0).to(device)
         batch_flip = batch_orig.clone()
         batch_flip[:, :, 0] = 1.0 - batch_flip[:, :, 0]
         batch_flip[:, :, 4] = -batch_flip[:, :, 4]
@@ -103,7 +117,7 @@ def get_gru_predictions(df, models):
                 t_orig, _ = model(batch_orig)
                 t_flip, _ = model(batch_flip)
                 t_flip[:, :, 0] = -t_flip[:, :, 0]
-            seed_avg = ((t_orig + t_flip) / 2.0).numpy()
+            seed_avg = ((t_orig + t_flip) / 2.0).cpu().numpy()
             for j in range(end - start):
                 per_seed_preds[s, start + j, :, 0] = seed_avg[j, :, 0] * fws[j]
                 per_seed_preds[s, start + j, :, 1] = seed_avg[j, :, 1] * fhs[j]
@@ -140,10 +154,12 @@ def main():
     print("Loading GRU models...")
     with open("model_config.json") as f:
         cfg = json.load(f)
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
     models = []
     for seed in MODEL_SEEDS:
         model = CrossingModel(**cfg)
-        model.load_state_dict(torch.load(f"best_model_s{seed}.pt", map_location="cpu", weights_only=True))
+        model.load_state_dict(torch.load(f"best_model_s{seed}.pt", map_location=DEVICE, weights_only=True))
+        model.to(DEVICE)
         model.eval()
         models.append(model)
 
@@ -177,7 +193,7 @@ def main():
                 colsample_bytree=0.75,
                 min_child_weight=5,
                 tree_method="hist",
-                n_jobs=-1,
+                device="cuda",
                 eval_metric="mae",
                 early_stopping_rounds=50,
             )
@@ -238,7 +254,7 @@ def main():
                 colsample_bytree=0.75,
                 min_child_weight=5,
                 tree_method="hist",
-                n_jobs=-1,
+                device="cuda",
                 eval_metric="mae",
                 early_stopping_rounds=50,
             )
@@ -264,11 +280,15 @@ def main():
 
     if meta_mean_ade < blended_mean_ade:
         print(f"\nMeta-learner wins! ({meta_mean_ade:.1f} vs {blended_mean_ade:.1f})")
+        for m in xgb_models_meta.values():
+            m.set_params(device="cpu")
         with open("traj_xgb.pkl", "wb") as f:
             pickle.dump({"models": xgb_models_meta, "meta_learner": True}, f)
         print("Saved traj_xgb.pkl (meta_learner mode)")
     elif blended_mean_ade < gru_mean_ade:
         print(f"\nBlend wins! ({blended_mean_ade:.1f} vs meta {meta_mean_ade:.1f})")
+        for m in xgb_models_blend.values():
+            m.set_params(device="cpu")
         with open("traj_xgb.pkl", "wb") as f:
             pickle.dump({"models": xgb_models_blend, "blend_weights": best_weights}, f)
         print("Saved traj_xgb.pkl (blend mode)")

@@ -23,4 +23,8 @@ traj_xgb_backup.pkl
 traj_xgb_60feat.pkl
 traj_xgb_dev.pkl
 model_dev.pkl
+model_dev_verified.pkl
 best_model_ft_*.pt
+best_model_s*_nopretrain.pt
+*.log
+pretrained_full.pt

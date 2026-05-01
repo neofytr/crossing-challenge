@@ -2,11 +2,11 @@
 
 ## Final score
 
-Dev composite score: **0.6323** (full dev, 6,065 samples)
+Dev composite score: **0.6207** (full dev, 6,065 samples)
 
-- Intent BCE: 0.1921 (baseline floor: 0.2488)
-- Trajectory mean ADE: 24.5 px (baseline floor: 49.8 px)
-- 36.8% improvement over zero-work baseline
+- Intent BCE: 0.1909 (baseline floor: 0.2488)
+- Trajectory mean ADE: 23.6 px (baseline floor: 49.8 px)
+- 37.9% improvement over zero-work baseline
 
 ---
 
@@ -14,9 +14,9 @@ Dev composite score: **0.6323** (full dev, 6,065 samples)
 
 Hybrid architecture combining CatBoost for intent classification with a bidirectional GRU ensemble for trajectory prediction, topped with intent-conditioned XGBoost per-horizon blending.
 
-**Trajectory model:** 2-layer bidirectional GRU (hidden_dim=128, input_dim=14, ~547k params) with velocity cumsum parameterization — the model predicts per-horizon velocity increments integrated via `cumsum` for smooth displacement trajectories. 14 input features per timestep: normalized bbox center/size, ego-compensated velocity, ego speed/yaw, compensated acceleration, raw velocity, and ego-induced displacement. Three models (seeds 42, 123, 456) ensembled with test-time horizontal flip augmentation (6 forward passes averaged). XGBoost trajectory regressors (61 features: 52 engineered + 8 polynomial/velocity + intent probability) blend with GRU predictions at per-horizon optimized weights.
+**Trajectory model:** 2-layer bidirectional GRU (hidden_dim=128, input_dim=14, ~547k params) with velocity cumsum parameterization — the model predicts per-horizon velocity increments integrated via `cumsum` for smooth displacement trajectories. 14 input features per timestep: normalized bbox center/size, ego-compensated velocity, ego speed/yaw, compensated acceleration, raw velocity, and ego-induced displacement. Three models (seeds 42, 123, 456) ensembled with test-time horizontal flip augmentation (6 forward passes averaged). GRU models pretrained on unlabeled tracklet windows via SSL (masked velocity prediction on ~300k+ windows) then fine-tuned on supervised labels. XGBoost trajectory regressors (67 features: 52 engineered + 8 polynomial/velocity + 6 physics-derived + intent probability) blend with GRU predictions at per-horizon optimized weights.
 
-**Intent model:** CatBoost classifier with 52 engineered features (47 base + 5 ego-motion-compensated). Features cover position, velocity, acceleration, ego vehicle motion, weather/time flags, motion dynamics, and compensated kinematics. Hyperparameters tuned via Optuna (150 CatBoost + 150 XGBoost trials; CatBoost won). Final intent: 0.80 * CatBoost + 0.20 * GRU intent head ensemble.
+**Intent model:** CatBoost + LightGBM ensemble with 52 engineered features (47 base + 5 ego-motion-compensated). Features cover position, velocity, acceleration, ego vehicle motion, weather/time flags, motion dynamics, and compensated kinematics. Hyperparameters tuned via Optuna (150 CatBoost + 150 XGBoost trials; CatBoost won). Final intent: 59% CatBoost + 41% LightGBM.
 
 **Class imbalance (7-9% positive):** Handled through calibrated log-loss (CatBoost naturally produces calibrated probabilities), horizon-weighted trajectory loss (H3: 1.5x, H4: 2.0x to emphasize harder long-horizon predictions where crossing pedestrians diverge most), and mixup augmentation (30% chance, Beta(0.4, 0.4)).
 
@@ -37,6 +37,7 @@ Hybrid architecture combining CatBoost for intent classification with a bidirect
 | 10    | 0.6387    | 0.1917 | 25.3  | Ego-motion compensation |
 | 11    | 0.6350    | 0.1903 | 25.1  | Intent ensemble + deeper XGB blend |
 | 15    | 0.6323    | 0.1921 | 24.5  | Combined data + cumsum + mixup + intent-conditioned XGB |
+| 16    | 0.6207    | 0.1909 | 23.6  | LightGBM intent ensemble + SSL GRU pretraining + 6 new XGB features |
 
 ---
 
@@ -52,12 +53,15 @@ Hybrid architecture combining CatBoost for intent classification with a bidirect
 8. **Transformer encoder** replacing BiGRU — ADE 27.4 vs 26.3. Self-attention is overkill for fixed 16-step sequences.
 9. **GRU fine-tuning with 3x crossing weight** — reweighting loss to emphasize crossing pedestrians. No ADE improvement; model already well-optimized.
 10. **Camera calibration from PIE intrinsics** (f=1004.8) — GRU had adapted to the approximate f_est=0.7*fw; changing it hurt.
+11. **5-seed GRU ensemble after XGBoost blending** — no gain over 3 seeds; XGBoost absorbs inter-seed variance.
+12. **XGBoost meta-learner with GRU predictions as features** — ADE 25.7 vs blend 25.0; GRU train-set overfitting leaks through.
+13. **hidden_dim=192** — overfitting, worse ADE on dev.
 
 ---
 
 ## Where AI tooling sped me up most
 
-Used **Claude Code** throughout. Biggest acceleration was the experiment loop — generating training scripts, loss functions, feature engineering, and data pipelines in minutes rather than hours. Also caught the Docker `requirements.txt` bug (CUDA index URL that would have silently blown the image past 2 GB). Particularly useful for the ego-motion compensation derivation and the XGBoost blending approach. Weakest at architectural intuition — confidently suggested polynomial extrapolation and CV-residual skip that both failed. The iteration speed paid off because failures were cheap to test and discard.
+Used **Claude Code** throughout. Biggest wins: experiment loop velocity (training scripts, loss functions, feature engineering in minutes), catching the Docker CUDA index URL bug that would have bloated the image past 2 GB, and the SSL pretraining data pipeline. The ego-motion compensation derivation and XGBoost blending approach also came out of AI-assisted iteration. Weakest at architectural intuition — polynomial extrapolation and CV-residual skip were confidently suggested and both failed. Iteration speed paid off since failures were cheap to test and discard.
 
 ---
 
@@ -66,8 +70,8 @@ Used **Claude Code** throughout. Biggest acceleration was the experiment loop �
 1. **Intent-conditioned trajectory heads** — separate prediction paths for crossing vs non-crossing pedestrians, rather than a single shared trajectory decoder.
 2. **Social context features** — nearby pedestrian count, group dynamics, relative positioning (not available in current data but would help with "pedestrian changed their mind" cases).
 3. **Multi-modal prediction** — predict multiple plausible futures and select the most likely; current model averages over modes.
-4. **Self-supervised pretraining** — pretrain the GRU encoder on unlabeled trajectory sequences (predict next frame) before fine-tuning on the supervised task.
-5. **Temporal attention with variable-length history** — use the full available history instead of fixed 16 frames, with attention to weight recent frames higher.
+4. **Temporal attention with variable-length history** — use the full available history instead of fixed 16 frames, with attention to weight recent frames higher.
+5. **Longer SSL pretraining** — more epochs and a stronger masking ratio on the encoder pretraining task.
 
 ---
 
@@ -104,12 +108,13 @@ python baseline.py
 pip install catboost optuna
 python tune_intent.py
 
-# Train GRU trajectory models (3 seeds, requires GPU)
-python train.py --seed 42 --output best_model_s42.pt
-python train.py --seed 123 --output best_model_s123.pt
-python train.py --seed 456 --output best_model_s456.pt
+# SSL pretrain GRU encoder on unlabeled tracklets
+python pretrain.py  # outputs pretrained_encoder.pt
 
-# Train XGBoost trajectory blending (uses intent probability as feature)
+# Fine-tune GRU trajectory models (3 seeds, requires GPU)
+python train_pretrained.py  # uses pretrained_encoder.pt, outputs best_model_s{42,123,456}.pt
+
+# Train XGBoost trajectory blending (67 features, uses intent probability as feature)
 python traj_xgb.py
 
 # Score
@@ -131,4 +136,4 @@ No pretrained model weights were used. All models trained from scratch on the pr
 
 ---
 
-_Total time spent on this challenge: ~20 hours._
+_Total time spent on this challenge: ~30 hours._

@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 import pickle
+import warnings
 from pathlib import Path
 
 import numpy as np
 import torch
+
+warnings.filterwarnings("ignore", message="X does not have valid feature names")
 
 from trajectory_model import CrossingModel
 
@@ -28,7 +31,12 @@ def _load_xgb():
         if isinstance(data, dict) and data.get("stacked"):
             _cached_xgb = data
         else:
-            _cached_xgb = {"intent": data["intent"], "stacked": False}
+            _cached_xgb = {
+                "intent": data["intent"],
+                "stacked": False,
+                "lgbm": data.get("lgbm"),
+                "lgbm_weight": data.get("lgbm_weight", 0.0),
+            }
     return _cached_xgb
 
 
@@ -65,7 +73,10 @@ def _traj_xgb_features(req: dict) -> np.ndarray:
     hist = _as_2d(req["bbox_history"])
     cx = (hist[:, 0] + hist[:, 2]) * 0.5
     cy = (hist[:, 1] + hist[:, 3]) * 0.5
+    h = hist[:, 3] - hist[:, 1]
     fw, fh = float(req["frame_w"]), float(req["frame_h"])
+    vx = np.diff(cx)
+    vy = np.diff(cy)
     t = np.arange(4)
     px = np.polyfit(t, cx[-4:], 1)
     py = np.polyfit(t, cy[-4:], 1)
@@ -76,7 +87,18 @@ def _traj_xgb_features(req: dict) -> np.ndarray:
         float(cx[-1] - cx[-8]) / fw if len(cx) >= 8 else 0.0,
         float(cy[-1] - cy[-8]) / fh if len(cy) >= 8 else 0.0,
     ], dtype=np.float32)
-    return np.concatenate([hand, extra]).reshape(1, -1)
+    ego_s = np.asarray(req["ego_speed_history"], dtype=np.float64)
+    depth_est = (fw * 0.7 * 1.7) / max(h[-1], 10.0)
+    depth_norm = min(depth_est / 100.0, 1.0)
+    ego_braking = (ego_s[-1] - ego_s[-4]) / max(ego_s.max(), 1e-6)
+    lat_accel = (abs(vx[-2:].mean()) - abs(vx[-6:-4].mean() if len(vx) >= 6 else vx[:2].mean())) / fw
+    vx_var = vx.var() / (fw * fw)
+    vy_var = vy.var() / (fh * fh)
+    heading_val = np.arctan2(vy[-4:].mean(), vx[-4:].mean())
+    pos_heading = (cx[-1] / fw) * heading_val / np.pi
+    extra2 = np.array([depth_norm, ego_braking, lat_accel, vx_var, vy_var, pos_heading],
+                      dtype=np.float32)
+    return np.concatenate([hand, extra, extra2]).reshape(1, -1)
 
 
 def _as_2d(x) -> np.ndarray:
@@ -309,7 +331,13 @@ def predict(request: dict) -> dict:
         intent_prob = float(clf.predict_proba(stacked_feats)[0, 1])
     else:
         clf = xgb_data["intent"]
-        intent_prob = float(clf.predict_proba(feats)[0, 1])
+        cat_prob = float(clf.predict_proba(feats)[0, 1])
+        if xgb_data.get("lgbm") is not None:
+            lgbm_prob = float(xgb_data["lgbm"].predict_proba(feats)[0, 1])
+            w_lgbm = xgb_data["lgbm_weight"]
+            intent_prob = (1 - w_lgbm) * cat_prob + w_lgbm * lgbm_prob
+        else:
+            intent_prob = cat_prob
 
     if not np.isfinite(intent_prob):
         intent_prob = 0.5

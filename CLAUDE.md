@@ -10,9 +10,9 @@ composite = 0.5 * (BCE / 0.2488) + 0.5 * (mean_ADE / 49.80)
 Lower is better. 1.0 = zero-work baseline (class prior + zero velocity).
 
 ## Current Best Scores (full dev, 6065 samples)
-- Composite: 0.6323
-- Intent BCE: 0.1921
-- Trajectory ADE: 24.5 px
+- Composite: 0.6207
+- Intent BCE: 0.1909
+- Trajectory ADE: 23.6 px
 
 ## Score Progression
 | Phase | Composite | BCE    | ADE   | What Changed |
@@ -24,6 +24,7 @@ Lower is better. 1.0 = zero-work baseline (class prior + zero velocity).
 | 10    | 0.6387    | 0.1917 | 25.3  | Ego-motion compensation + retune |
 | 11    | 0.6350    | 0.1903 | 25.1  | Intent ensemble + deeper XGB blend |
 | 15    | 0.6323    | 0.1921 | 24.5  | Combined data + cumsum + mixup + intent-conditioned XGB |
+| 16    | 0.6207    | 0.1909 | 23.6  | LightGBM intent ensemble + SSL GRU pretraining + 6 new XGB features |
 
 ## Data
 - **Train**: 70,737 windows (stride=2 re-slicing of JAAD+PIE), **Dev**: 6,065, **Eval**: 16,947 (has full labels)
