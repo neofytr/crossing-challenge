@@ -194,7 +194,7 @@ def main():
     for h in range(4):
         best_ade = float("inf")
         best_w = 0.0
-        for w in np.arange(0.0, 1.01, 0.05):
+        for w in np.arange(0.0, 1.01, 0.01):
             blended = w * xgb_preds_dev[:, h, :] + (1 - w) * gru_preds_dev[:, h, :]
             ade = np.sqrt((blended[:, 0] - y_dev[:, h, 0])**2 +
                           (blended[:, 1] - y_dev[:, h, 1])**2).mean()

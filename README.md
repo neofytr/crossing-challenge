@@ -2,55 +2,62 @@
 
 ## Final score
 
-Dev composite score: **0.6388** (from `python grade.py`)
+Full-dev composite score: **0.6333** (6,065 samples)
 
-- Intent BCE: 0.1911 (baseline: 0.2129)
-- Trajectory mean ADE: 25.4 px (baseline: 40.2 px)
-- 23.1% improvement over baseline
+- Intent BCE: 0.1921 (baseline: 0.2488)
+- Trajectory mean ADE: 24.6 px (baseline: 49.8 px)
+- 36.7% improvement over zero-work baseline
 
 ---
 
 ## Approach
 
-Hybrid architecture combining XGBoost for intent classification with a bidirectional GRU for trajectory prediction.
+Hybrid architecture combining CatBoost for intent classification with a bidirectional GRU ensemble for trajectory prediction, topped with XGBoost per-horizon blending.
 
-**Trajectory model:** 2-layer bidirectional GRU (hidden_dim=128, ~546k params) trained on normalized 16-frame sequences with Huber loss (delta=15.0) and horizon-weighted objectives (H3: 1.5x, H4: 2.0x). Each timestep has 10 features: normalized bbox center/size, frame-to-frame velocity, ego speed, ego yaw, and acceleration (ax, ay). Three models (seeds 42, 123, 456) ensembled with test-time horizontal flip augmentation (6 predictions averaged). XGBoost trajectory regressors trained per-horizon and blended with GRU predictions at optimal weights.
+**Trajectory model:** 2-layer bidirectional GRU (hidden_dim=128, input_dim=14, ~546k params) with velocity cumsum parameterization — the model predicts per-horizon velocity increments integrated via `cumsum` to produce smooth displacement trajectories. Trained on 87,684 windows (combined train+eval) with Huber loss (delta=15.0), horizon-weighted objectives (H3: 1.5x, H4: 2.0x), mixup augmentation (30% chance, Beta(0.4,0.4)), and speed perturbation (30% chance, 0.85-1.15x). Each timestep has 14 features: normalized bbox center/size, ego-compensated velocity, ego speed/yaw, compensated acceleration, raw velocity, and ego-induced displacement. Three models (seeds 42, 123, 456) ensembled with test-time horizontal flip augmentation (6 predictions averaged). XGBoost trajectory regressors blend hand-crafted features with GRU predictions at per-horizon optimal weights (H1: 0.73, H2: 0.55, H3: 0.39, H4: 0.29).
 
-**Intent model:** CatBoost classifier with 47 engineered features — positional, velocity, acceleration, ego vehicle, weather/time, plus motion dynamics (displacement, heading, aspect ratio changes, lateral/longitudinal ratios, stationarity). Hyperparameters tuned via Optuna Bayesian optimization (150 trials CatBoost vs 150 trials XGBoost; CatBoost won). Early stopping at 421 iterations.
+**Intent model:** CatBoost classifier with 52 engineered features (47 base + 5 ego-compensated) — positional, velocity, acceleration, ego vehicle, weather/time, motion dynamics, and ego-motion-corrected kinematics. Hyperparameters tuned via Optuna (150 trials CatBoost vs 150 trials XGBoost; CatBoost won). Intent ensemble: 0.80 * CatBoost + 0.20 * GRU intent head.
 
-**Training data:** Re-sliced JAAD+PIE tracklets with stride=2 (vs original stride=5), producing 70,737 training windows — 2.5x more than the starter's 28,680. Speed perturbation augmentation (30% chance, scale 0.85-1.15) during GRU training.
+**Training data:** Re-sliced JAAD+PIE tracklets with stride=2, plus eval set with full labels, producing 87,684 training windows.
+
+---
+
+## Score progression
+
+| Phase | Composite | BCE    | ADE   | What Changed |
+|-------|-----------|--------|-------|--------------|
+| 0     | 0.8311    | 0.2129 | 40.2  | XGBoost baseline |
+| 4     | 0.7123    | 0.2129 | 27.3  | BiGRU trajectory model |
+| 8     | 0.6507    | 0.1970 | 25.4  | XGBoost trajectory blending |
+| 9     | 0.6388    | 0.1911 | 25.4  | CatBoost intent via Optuna |
+| 10    | 0.6387    | 0.1917 | 25.3  | Ego-motion compensation + retune |
+| 11    | 0.6350    | 0.1903 | 25.1  | Intent ensemble + deeper XGB blend |
+| 15    | 0.6239    | 0.1867 | 24.8  | Combined data + cumsum + mixup + retune |
 
 ---
 
 ## What didn't work
 
-1. **Polynomial trajectory extrapolation** — quadratic fit on the 16-frame history amplified noise at extrapolation distances. Degree-2 polyfit worsened ADE from 40.2 to 54.1 px. The baseline's "mean of last 4 velocity diffs" is a better recency-weighted estimator than any polynomial over the full history.
-
-2. **Larger GRU + temporal attention** — hidden_dim=256 with a learned temporal attention mechanism overfitted on both 28k and 70k samples. The best it achieved was 27.3 px ADE (vs 27.3 with the simpler model). The 16-step input sequence is too short for attention to provide meaningful benefit over the GRU's built-in recency bias.
-
-3. **Constant-velocity residual skip connection** — adding an explicit CV baseline as a skip connection (model predicts correction to CV) regressed ADE from 27.3 to 31.6 px. The GRU already learns velocity patterns from the raw input; the skip connection constrained rather than helped.
-
-4. **GRU encoder stacking for intent** — extracted 256-dim GRU encoder features and fed them alongside 47 hand-crafted features to XGBoost. BCE worsened from 0.2011 to 0.2087. High-dimensional neural representations add noise to gradient boosting.
-
-5. **XGBoost residual trajectory correction** — training XGBoost to predict GRU trajectory errors (residuals) instead of raw targets. Residual ADE 25.2 vs blend ADE 25.1. The convex blend approach is slightly better because it constrains the XGBoost to not over-correct.
-
-6. **Cross-attention trajectory decoder** — replacing the MLP trajectory head with learned horizon queries and multi-head cross-attention over GRU outputs. ADE 26.9 vs MLP's 26.6. For 16-step sequences, the GRU's last hidden state already captures temporal info; attention adds parameters without benefit.
-
-7. **Gaussian NLL loss** — predicting per-coordinate variance alongside position to learn heteroscedastic uncertainty. The model exploits variance prediction to minimize NLL without improving point estimates — loss goes negative (-5.42) while BCE explodes to 0.3665. Fundamentally flawed for this task.
+1. **Polynomial trajectory extrapolation** — quadratic fit on the 16-frame history amplified noise. ADE 54.1 vs 40.2 px.
+2. **Larger GRU + temporal attention** — hidden_dim=256 with learned attention overfitted. No improvement over simpler model.
+3. **Constant-velocity residual skip** — ADE regressed from 27.3 to 31.6 px. GRU already learns velocity patterns.
+4. **GRU encoder stacking for intent** — 256-dim neural features as XGBoost input. BCE worsened from 0.2011 to 0.2087.
+5. **XGBoost residual correction** — predicting GRU errors instead of blending. Marginal vs blend approach.
+6. **Cross-attention trajectory decoder** — horizon queries with multi-head attention. ADE worse than MLP head.
+7. **Gaussian NLL loss** — model exploits variance to minimize loss without improving point estimates. BCE explodes.
+8. **5-seed ensemble** — no gain over 3 seeds after XGBoost blending absorbs variance.
+9. **XGBoost meta-learner** — GRU predictions as features. ADE 25.7 vs blend 25.0. GRU overfit on train data leaks through.
+10. **hidden_dim=192** — overfitting, worse ADE.
+11. **Loss rebalancing** [0.5, 1.0, 2.0, 4.0] + Huber delta 30 — ADE 26.9 vs 26.3, worse.
+12. **Bbox size features** (dw/dh) — redundant, GRU learns diffs from w/h implicitly.
+13. **INTENT_WEIGHT=20** — no change in ADE vs default 50.
+14. **Transformer encoder** replacing BiGRU — ADE 27.4 vs 26.3 for 16-step sequences.
 
 ---
 
 ## Where AI tooling sped me up most
 
 Used **Claude Code** throughout. Biggest acceleration was in the experiment loop — generating training scripts, loss functions, and data pipelines in minutes rather than hours. Also caught the Docker `requirements.txt` bug (CUDA index URL that would have silently blown the image past 2GB). The tool was weakest at architectural intuition — it confidently suggested the polynomial and CV-residual approaches that both failed. The iteration speed still paid off because failures were cheap to test.
-
----
-
-## Next experiments
-
-- **Transformer encoder** replacing GRU — global self-attention over all 16 timesteps with learned positional encoding. Also enables migration to a custom C deep learning framework (Axiom) that has MHA but no RNN primitives.
-- **Autoregressive trajectory decoder** — predict each horizon conditioned on the previous prediction, rather than all 4 from a single context vector. Should help long-horizon ADE specifically.
-- **Ego-motion compensated coordinates** — subtract estimated ego-induced pixel displacement from observed trajectories before feeding to the model.
 
 ---
 
@@ -73,6 +80,14 @@ python data/build_tracklets.py
 # Edit data/build_windows.py: change STRIDE = 5 to STRIDE = 2
 python data/build_windows.py
 cp data/dev_original.parquet data/dev.parquet  # restore original dev set
+
+# Combine train + eval for full training set
+python -c "
+import pandas as pd
+train = pd.read_parquet('data/train.parquet')
+ev = pd.read_parquet('data/eval.parquet')
+pd.concat([train, ev], ignore_index=True).to_parquet('data/train_full.parquet')
+"
 
 # Train intent model
 python baseline.py
@@ -105,7 +120,3 @@ docker run --rm --network none -v $(pwd)/data:/work my-crossing /work/dev.parque
 - **PIE** (York University, MIT license): pedestrian intent annotations with OBD ego-motion data. Bulk of training data. https://github.com/aras62/PIE
 
 No pretrained model weights were used. All models trained from scratch on the provided + re-sliced data.
-
----
-
-Total time spent on this challenge: ~8 hours.
