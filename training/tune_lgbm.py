@@ -8,9 +8,13 @@ import optuna
 from sklearn.metrics import log_loss
 import lightgbm as lgb
 
+import sys
+_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(_ROOT))
+
 from predict import _engineered_features
 
-DATA = Path(__file__).parent / "data"
+DATA = _ROOT / "data"
 
 REQUEST_FIELDS = [
     "ped_id", "frame_w", "frame_h",
@@ -82,7 +86,7 @@ def main():
     y_dev = dev["will_cross_2s"].to_numpy(dtype=np.int32)
     print(f"  {time.time()-t0:.1f}s  shape: {X_train.shape}")
 
-    with open("model.pkl", "rb") as f:
+    with open(_ROOT / "model.pkl", "rb") as f:
         model_data = pickle.load(f)
     cat_clf = model_data["intent"]
     cat_probs = cat_clf.predict_proba(X_dev)[:, 1]
@@ -147,7 +151,7 @@ def main():
         model_data["lgbm"] = final_clf
         model_data["lgbm_weight"] = w_lgbm
         model_data["engine"] = "catboost+lgbm"
-        with open("model.pkl", "wb") as f:
+        with open(_ROOT / "model.pkl", "wb") as f:
             pickle.dump(model_data, f)
         print("Saved!")
     else:

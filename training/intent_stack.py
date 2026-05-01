@@ -11,10 +11,14 @@ import torch
 from sklearn.metrics import log_loss
 from xgboost import XGBClassifier
 
+import sys
+_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(_ROOT))
+
 from predict import _engineered_features, _build_gru_input
 from trajectory_model import CrossingModel
 
-DATA = Path(__file__).parent / "data"
+DATA = _ROOT / "data"
 MODEL_SEEDS = [42, 123, 456]
 
 REQUEST_FIELDS = [
@@ -67,12 +71,12 @@ def main():
     print(f"  train: {len(train):,}  dev: {len(dev):,}")
 
     print("Loading GRU models...")
-    with open("model_config.json") as f:
+    with open(_ROOT / "model_config.json") as f:
         cfg = json.load(f)
     models = []
     for seed in MODEL_SEEDS:
         model = CrossingModel(**cfg)
-        path = Path(__file__).parent / f"best_model_s{seed}.pt"
+        path = _ROOT / f"best_model_s{seed}.pt"
         model.load_state_dict(torch.load(path, map_location="cpu", weights_only=True))
         model.eval()
         models.append(model)
@@ -119,7 +123,7 @@ def main():
     dev_probs = clf.predict_proba(X_dev)[:, 1]
     ll = log_loss(y_dev, np.clip(dev_probs, 1e-6, 1 - 1e-6))
 
-    with open("model.pkl", "rb") as f:
+    with open(_ROOT / "model.pkl", "rb") as f:
         old_clf = pickle.load(f)["intent"]
     old_probs = old_clf.predict_proba(X_dev_hand)[:, 1]
     old_ll = log_loss(y_dev, np.clip(old_probs, 1e-6, 1 - 1e-6))
@@ -130,7 +134,7 @@ def main():
 
     if ll < old_ll:
         print("\n  Stacked model is better! Saving...")
-        with open("model.pkl", "wb") as f:
+        with open(_ROOT / "model.pkl", "wb") as f:
             pickle.dump({"intent": clf, "stacked": True, "hand_dim": X_train_hand.shape[1]}, f)
     else:
         print("\n  Stacked model is WORSE. Keeping old model.")

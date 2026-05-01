@@ -17,6 +17,10 @@ import torch.nn.functional as F
 from torch.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 
+import sys
+_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(_ROOT))
+
 from trajectory_data import TrajectoryDataset
 from trajectory_model import CrossingModel
 
@@ -29,7 +33,7 @@ MIN_LR = 1e-5
 INTENT_WEIGHT = 50.0
 MODEL_SEEDS = [42, 123, 456]
 MODEL_CFG = {"input_dim": 14, "hidden_dim": 128, "num_layers": 2, "dropout": 0.2}
-DATA = Path(__file__).parent / "data"
+DATA = _ROOT / "data"
 PRETRAINED_ENCODER = Path(__file__).parent / "pretrained_encoder.pt"
 
 
@@ -67,7 +71,7 @@ def seed_worker(worker_id):
 
 
 def train_one_seed(seed: int, train_dl: DataLoader) -> None:
-    output = f"best_model_s{seed}.pt"
+    output = str(_ROOT / f"best_model_s{seed}.pt")
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)

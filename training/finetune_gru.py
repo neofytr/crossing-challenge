@@ -10,6 +10,11 @@ import torch
 import torch.nn.functional as F
 from torch.amp import GradScaler, autocast
 
+import sys
+from pathlib import Path
+_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(_ROOT))
+
 from trajectory_data import build_dataloaders
 from trajectory_model import CrossingModel
 

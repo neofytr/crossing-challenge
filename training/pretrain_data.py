@@ -7,7 +7,7 @@ import torch
 from torch.utils.data import Dataset
 from pathlib import Path
 
-DATA = Path(__file__).parent / "data"
+DATA = Path(__file__).parent.parent / "data"
 TRACKLETS = DATA / "tracklets_raw.parquet"
 PAST_LEN = 16
 FUTURE_LEN = 30

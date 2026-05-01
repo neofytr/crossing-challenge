@@ -14,10 +14,14 @@ from catboost import CatBoostClassifier
 from lightgbm import LGBMClassifier
 from xgboost import XGBRegressor
 
+import sys
+_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(_ROOT))
+
 from predict import _engineered_features, _build_gru_input
 from trajectory_model import CrossingModel
 
-DATA = Path(__file__).parent / "data"
+DATA = _ROOT / "data"
 MODEL_SEEDS = [42, 123, 456]
 HORIZON_KEYS = ["bbox_500ms", "bbox_1000ms", "bbox_1500ms", "bbox_2000ms"]
 REQUEST_FIELDS = [
@@ -145,7 +149,7 @@ def main():
 
     # --- Step 1: Retrain CatBoost intent ---
     print("\n=== Step 1: Retrain CatBoost intent ===")
-    with open("model.pkl", "rb") as f:
+    with open(_ROOT / "model.pkl", "rb") as f:
         old = pickle.load(f)
     old_clf = old["intent"]
 
@@ -182,11 +186,11 @@ def main():
         lgbm_clf = LGBMClassifier(**lgbm_params)
         lgbm_clf.fit(X_all, y_all)
         lgbm_weight = old.get("lgbm_weight", 0.0)
-        with open("model.pkl", "wb") as f:
+        with open(_ROOT / "model.pkl", "wb") as f:
             pickle.dump({"intent": clf, "lgbm": lgbm_clf, "lgbm_weight": lgbm_weight}, f)
         print(f"  Saved model.pkl (CatBoost + LightGBM retrained on all data, lgbm_weight={lgbm_weight:.2f})")
     else:
-        with open("model.pkl", "wb") as f:
+        with open(_ROOT / "model.pkl", "wb") as f:
             pickle.dump({"intent": clf}, f)
         print("  Saved model.pkl (CatBoost retrained on all data)")
 
@@ -196,13 +200,13 @@ def main():
     print(f"  Feature shape: {X_traj.shape}")
 
     print("\n=== Step 3: Get GRU predictions ===")
-    with open("model_config.json") as f:
+    with open(_ROOT / "model_config.json") as f:
         cfg = json.load(f)
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
     models = []
     for seed in MODEL_SEEDS:
         m = CrossingModel(**cfg)
-        m.load_state_dict(torch.load(f"best_model_s{seed}.pt", map_location=DEVICE, weights_only=True))
+        m.load_state_dict(torch.load(_ROOT / f"best_model_s{seed}.pt", map_location=DEVICE, weights_only=True))
         m.to(DEVICE)
         m.eval()
         models.append(m)
@@ -210,7 +214,7 @@ def main():
     gru_preds = get_gru_predictions(all_data, models)
 
     print("\n=== Step 4: Train XGB regressors ===")
-    with open("traj_xgb.pkl", "rb") as f:
+    with open(_ROOT / "traj_xgb.pkl", "rb") as f:
         old_xgb = pickle.load(f)
     old_weights = old_xgb.get("blend_weights", [0.5, 0.5, 0.5, 0.5])
 
@@ -232,7 +236,7 @@ def main():
 
     for m in xgb_models.values():
         m.set_params(device="cpu")
-    with open("traj_xgb.pkl", "wb") as f:
+    with open(_ROOT / "traj_xgb.pkl", "wb") as f:
         pickle.dump({"models": xgb_models, "blend_weights": old_weights}, f)
     print(f"\n  Saved traj_xgb.pkl (retrained on all data, {len(xgb_models)} models)")
     print(f"\nTotal time: {time.time()-t_start:.0f}s")

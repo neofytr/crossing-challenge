@@ -10,6 +10,11 @@ import torch
 from torch.amp import GradScaler, autocast
 from torch.utils.data import DataLoader, random_split, SubsetRandomSampler
 
+import sys
+from pathlib import Path
+_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(_ROOT))
+
 from pretrain_data import PretrainDataset
 from trajectory_model import CrossingModel
 
@@ -72,7 +77,7 @@ def main():
 
     print(f"Train: {n_train}, Val: {n_val}")
 
-    with open("model_config.json") as f:
+    with open(_ROOT / "model_config.json") as f:
         cfg = json.load(f)
 
     model = CrossingModel(**cfg).to(DEVICE)
@@ -129,12 +134,12 @@ def main():
 
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
-            torch.save(model.state_dict(), "pretrained_full.pt")
+            torch.save(model.state_dict(), Path(__file__).parent / "pretrained_full.pt")
             encoder_state = {}
             for k, v in model.state_dict().items():
                 if k.startswith(("input_proj.", "layer_norm.", "gru.")):
                     encoder_state[k] = v
-            torch.save(encoder_state, "pretrained_encoder.pt")
+            torch.save(encoder_state, Path(__file__).parent / "pretrained_encoder.pt")
             marker = " *saved*"
         else:
             marker = ""

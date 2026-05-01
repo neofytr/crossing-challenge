@@ -84,7 +84,7 @@ Used **Claude Code** throughout. Biggest wins: experiment loop velocity (trainin
 git clone https://github.com/neofytr/crossing-challenge.git
 cd crossing-challenge
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements-dev.txt
+pip install -r training/requirements-dev.txt
 
 # Download extended training data (JAAD + PIE annotations)
 mkdir -p data/raw
@@ -106,18 +106,18 @@ pd.concat([train, ev], ignore_index=True).to_parquet('data/train_full.parquet')
 "
 
 # Train intent model (baseline, then Optuna-tuned CatBoost)
-python baseline.py
+python training/baseline.py
 pip install catboost optuna
-python tune_intent.py
+python training/tune_intent.py
 
 # SSL pretrain GRU encoder on unlabeled tracklets
-python pretrain.py  # outputs pretrained_encoder.pt
+python training/pretrain.py  # outputs training/pretrained_encoder.pt
 
 # Fine-tune GRU trajectory models (3 seeds, requires GPU)
-python train_pretrained.py  # uses pretrained_encoder.pt, outputs best_model_s{42,123,456}.pt
+python training/train_pretrained.py  # uses training/pretrained_encoder.pt, outputs best_model_s{42,123,456}.pt
 
 # Train XGBoost trajectory blending (67 features, uses intent probability as feature)
-python traj_xgb.py
+python training/traj_xgb.py
 
 # Score
 python grade.py

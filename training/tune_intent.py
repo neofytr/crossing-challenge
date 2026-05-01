@@ -7,9 +7,13 @@ import pandas as pd
 import optuna
 from sklearn.metrics import log_loss
 
+import sys
+_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(_ROOT))
+
 from predict import _engineered_features
 
-DATA = Path(__file__).parent / "data"
+DATA = _ROOT / "data"
 
 REQUEST_FIELDS = [
     "ped_id", "frame_w", "frame_h",
@@ -103,7 +107,7 @@ def main():
     y_dev = dev["will_cross_2s"].to_numpy(dtype=np.int32)
     print(f"  {time.time()-t0:.1f}s  shape: {X_train.shape}")
 
-    with open("model.pkl", "rb") as f:
+    with open(_ROOT / "model.pkl", "rb") as f:
         old_data = pickle.load(f)
     old_clf = old_data["intent"]
     old_probs = old_clf.predict_proba(X_dev)[:, 1]
@@ -164,7 +168,7 @@ def main():
 
     if final_bce < old_bce:
         print(f"\n  Saving new model...")
-        with open("model.pkl", "wb") as f:
+        with open(_ROOT / "model.pkl", "wb") as f:
             pickle.dump({"intent": clf, "stacked": False, "engine": engine}, f)
         print("  Saved!")
     else:
@@ -186,10 +190,10 @@ def main():
 
     if best_temp != 1.0 and best_temp_bce < final_bce:
         print(f"  Temperature scaling helps! Saving temp={best_temp:.2f}")
-        with open("model.pkl", "rb") as f:
+        with open(_ROOT / "model.pkl", "rb") as f:
             data = pickle.load(f)
         data["temperature"] = best_temp
-        with open("model.pkl", "wb") as f:
+        with open(_ROOT / "model.pkl", "wb") as f:
             pickle.dump(data, f)
 
     print("\nDone. Run python grade.py")

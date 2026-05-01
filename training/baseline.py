@@ -21,10 +21,13 @@ import pandas as pd
 from sklearn.metrics import log_loss
 from xgboost import XGBClassifier
 
+_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(_ROOT))
+
 from predict import _engineered_features
 
-DATA = Path(__file__).parent / "data"
-MODEL_PATH = Path(__file__).parent / "model.pkl"
+DATA = _ROOT / "data"
+MODEL_PATH = _ROOT / "model.pkl"
 
 
 REQUEST_FIELDS = [

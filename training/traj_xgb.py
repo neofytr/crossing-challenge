@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 import pickle
 import time
+import sys
 from pathlib import Path
+_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(_ROOT))
 
 import numpy as np
 import pandas as pd
@@ -13,11 +16,11 @@ from xgboost import XGBRegressor
 from predict import _engineered_features, _build_gru_input
 from trajectory_model import CrossingModel
 
-with open("model.pkl", "rb") as f:
+with open(_ROOT / "model.pkl", "rb") as f:
     _intent_data = pickle.load(f)
 _intent_model = _intent_data["intent"] if isinstance(_intent_data, dict) else _intent_data
 
-DATA = Path(__file__).parent / "data"
+DATA = _ROOT / "data"
 MODEL_SEEDS = [42, 123, 456]
 HORIZON_KEYS = ["bbox_500ms", "bbox_1000ms", "bbox_1500ms", "bbox_2000ms"]
 
@@ -152,13 +155,13 @@ def main():
     print(f"  {time.time()-t0:.1f}s  hand-crafted shape: {X_train.shape}")
 
     print("Loading GRU models...")
-    with open("model_config.json") as f:
+    with open(_ROOT / "model_config.json") as f:
         cfg = json.load(f)
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
     models = []
     for seed in MODEL_SEEDS:
         model = CrossingModel(**cfg)
-        model.load_state_dict(torch.load(f"best_model_s{seed}.pt", map_location=DEVICE, weights_only=True))
+        model.load_state_dict(torch.load(_ROOT / f"best_model_s{seed}.pt", map_location=DEVICE, weights_only=True))
         model.to(DEVICE)
         model.eval()
         models.append(model)
@@ -282,14 +285,14 @@ def main():
         print(f"\nMeta-learner wins! ({meta_mean_ade:.1f} vs {blended_mean_ade:.1f})")
         for m in xgb_models_meta.values():
             m.set_params(device="cpu")
-        with open("traj_xgb.pkl", "wb") as f:
+        with open(_ROOT / "traj_xgb.pkl", "wb") as f:
             pickle.dump({"models": xgb_models_meta, "meta_learner": True}, f)
         print("Saved traj_xgb.pkl (meta_learner mode)")
     elif blended_mean_ade < gru_mean_ade:
         print(f"\nBlend wins! ({blended_mean_ade:.1f} vs meta {meta_mean_ade:.1f})")
         for m in xgb_models_blend.values():
             m.set_params(device="cpu")
-        with open("traj_xgb.pkl", "wb") as f:
+        with open(_ROOT / "traj_xgb.pkl", "wb") as f:
             pickle.dump({"models": xgb_models_blend, "blend_weights": best_weights}, f)
         print("Saved traj_xgb.pkl (blend mode)")
     else:
