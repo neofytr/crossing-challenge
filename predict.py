@@ -6,17 +6,25 @@ import warnings
 from pathlib import Path
 
 import numpy as np
-import torch
 
 warnings.filterwarnings("ignore", message="X does not have valid feature names")
-
-from trajectory_model import CrossingModel
 
 MODEL_PATH = Path(__file__).parent / "model.pkl"
 GRU_CONFIG = Path(__file__).parent / "model_config.json"
 TRAJ_XGB_PATH = Path(__file__).parent / "traj_xgb.pkl"
 HORIZON_KEYS = ["bbox_500ms", "bbox_1000ms", "bbox_1500ms", "bbox_2000ms"]
 MODEL_SEEDS = [42, 123, 456]
+
+# Use ONNX Runtime for inference if .onnx files are present (CPU-lean, <2 GB Docker image).
+# Falls back to PyTorch when .onnx files are absent (dev / training environment).
+_ONNX_DIR = Path(__file__).parent
+_USE_ONNX = (_ONNX_DIR / "model_s42.onnx").exists()
+
+if _USE_ONNX:
+    import onnxruntime as ort
+else:
+    import torch
+    from trajectory_model import CrossingModel
 
 _cached_xgb = None
 _cached_gru_models = None
@@ -45,9 +53,17 @@ def _load_gru_models():
     if _cached_gru_models is not None:
         return _cached_gru_models
 
+    if _USE_ONNX:
+        sessions = []
+        for seed in MODEL_SEEDS:
+            path = str(_ONNX_DIR / f"model_s{seed}.onnx")
+            sess = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
+            sessions.append(sess)
+        _cached_gru_models = sessions
+        return sessions
+
     with open(GRU_CONFIG) as f:
         cfg = json.load(f)
-
     models = []
     for seed in MODEL_SEEDS:
         model = CrossingModel(**cfg)
@@ -55,7 +71,6 @@ def _load_gru_models():
         model.load_state_dict(torch.load(path, map_location="cpu", weights_only=True))
         model.eval()
         models.append(model)
-
     _cached_gru_models = models
     return models
 
@@ -308,7 +323,10 @@ def _build_gru_input(req: dict) -> torch.Tensor:
     ], axis=-1)
 
     seq = np.nan_to_num(seq, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
-    return torch.from_numpy(seq).unsqueeze(0)  # [1, 16, 14]
+    arr = seq[np.newaxis]  # [1, 16, 14]
+    if _USE_ONNX:
+        return arr
+    return torch.from_numpy(seq).unsqueeze(0)
 
 
 def predict(request: dict) -> dict:
@@ -320,29 +338,22 @@ def predict(request: dict) -> dict:
     models = _load_gru_models()
     input_orig = _build_gru_input(request)
 
-    if xgb_data.get("stacked"):
-        clf = xgb_data["intent"]
-        enc_list = []
-        for model in models:
-            with torch.no_grad():
-                enc_list.append(model.encode(input_orig))
-        gru_feats = torch.stack(enc_list).mean(dim=0).numpy()
-        stacked_feats = np.concatenate([feats, gru_feats], axis=1)
-        intent_prob = float(clf.predict_proba(stacked_feats)[0, 1])
+    clf = xgb_data["intent"]
+    cat_prob = float(clf.predict_proba(feats)[0, 1])
+    if xgb_data.get("lgbm") is not None:
+        lgbm_prob = float(xgb_data["lgbm"].predict_proba(feats)[0, 1])
+        w_lgbm = xgb_data["lgbm_weight"]
+        intent_prob = (1 - w_lgbm) * cat_prob + w_lgbm * lgbm_prob
     else:
-        clf = xgb_data["intent"]
-        cat_prob = float(clf.predict_proba(feats)[0, 1])
-        if xgb_data.get("lgbm") is not None:
-            lgbm_prob = float(xgb_data["lgbm"].predict_proba(feats)[0, 1])
-            w_lgbm = xgb_data["lgbm_weight"]
-            intent_prob = (1 - w_lgbm) * cat_prob + w_lgbm * lgbm_prob
-        else:
-            intent_prob = cat_prob
+        intent_prob = cat_prob
 
     if not np.isfinite(intent_prob):
         intent_prob = 0.5
 
-    input_flip = input_orig.clone()
+    if _USE_ONNX:
+        input_flip = input_orig.copy()
+    else:
+        input_flip = input_orig.clone()
     input_flip[0, :, 0] = 1.0 - input_flip[0, :, 0]
     input_flip[0, :, 4] = -input_flip[0, :, 4]
     input_flip[0, :, 7] = -input_flip[0, :, 7]
@@ -352,17 +363,27 @@ def predict(request: dict) -> dict:
 
     per_seed_traj = []
     all_intent_preds = []
-    for model in models:
-        with torch.no_grad():
-            traj_orig, intent_orig = model(input_orig)
-            traj_flip, intent_flip = model(input_flip)
-            traj_flip[:, :, 0] = -traj_flip[:, :, 0]
-        per_seed_traj.append((traj_orig + traj_flip) / 2.0)
-        all_intent_preds.append(intent_orig.item())
-        all_intent_preds.append(intent_flip.item())
 
-    traj_avg = torch.stack(per_seed_traj).mean(dim=0)
-    traj_delta = traj_avg.squeeze(0).numpy()
+    if _USE_ONNX:
+        for sess in models:
+            traj_o, intent_o = sess.run(None, {"input": input_orig})
+            traj_f, intent_f = sess.run(None, {"input": input_flip})
+            traj_f[0, :, 0] = -traj_f[0, :, 0]
+            per_seed_traj.append((traj_o + traj_f) / 2.0)
+            all_intent_preds.append(float(intent_o[0]))
+            all_intent_preds.append(float(intent_f[0]))
+        traj_delta = np.mean(per_seed_traj, axis=0).squeeze(0)
+    else:
+        for model in models:
+            with torch.no_grad():
+                traj_orig, intent_orig = model(input_orig)
+                traj_flip, intent_flip = model(input_flip)
+                traj_flip[:, :, 0] = -traj_flip[:, :, 0]
+            per_seed_traj.append((traj_orig + traj_flip) / 2.0)
+            all_intent_preds.append(intent_orig.item())
+            all_intent_preds.append(intent_flip.item())
+        traj_avg = torch.stack(per_seed_traj).mean(dim=0)
+        traj_delta = traj_avg.squeeze(0).numpy()
 
     gru_intent_prob = float(np.mean(all_intent_preds))
     intent_prob = 0.80 * intent_prob + 0.20 * gru_intent_prob
@@ -382,7 +403,7 @@ def predict(request: dict) -> dict:
             traj_feats = np.nan_to_num(traj_feats, nan=0.0, posinf=0.0, neginf=0.0)
         per_seed_px = np.zeros((len(models), 4, 2))
         for s, st in enumerate(per_seed_traj):
-            st_np = st.squeeze(0).numpy()
+            st_np = st.squeeze(0) if _USE_ONNX else st.squeeze(0).numpy()
             per_seed_px[s, :, 0] = st_np[:, 0] * fw
             per_seed_px[s, :, 1] = st_np[:, 1] * fh
         gru_avg_px = per_seed_px.mean(axis=0)
