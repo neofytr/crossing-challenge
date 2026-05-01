@@ -160,7 +160,6 @@ def main():
         "learning_rate": old_params.get("learning_rate", 0.0138),
         "l2_leaf_reg": old_params.get("l2_leaf_reg", 0.2115),
         "min_data_in_leaf": old_params.get("min_data_in_leaf", 19),
-        "rsm": old_params.get("rsm", 0.3817),
         "subsample": old_params.get("subsample", 0.6177),
         "bootstrap_type": old_params.get("bootstrap_type", "MVS"),
         "boosting_type": old_params.get("boosting_type", "Plain"),
@@ -181,7 +180,7 @@ def main():
         n_lgbm = lgbm_params.get("n_estimators", 1000)
         lgbm_params["n_estimators"] = n_lgbm
         lgbm_clf = LGBMClassifier(**lgbm_params)
-        lgbm_clf.fit(X_all, y_all, verbose=-1)
+        lgbm_clf.fit(X_all, y_all)
         lgbm_weight = old.get("lgbm_weight", 0.0)
         with open("model.pkl", "wb") as f:
             pickle.dump({"intent": clf, "lgbm": lgbm_clf, "lgbm_weight": lgbm_weight}, f)
